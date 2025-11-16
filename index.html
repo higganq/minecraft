@@ -215,6 +215,9 @@
         <!-- Control buttons -->
         <button id="reset">Reset</button>
         <button id="zoomExtent">Zoom Extent</button>
+        <!-- Zoom in/out buttons for easy zoom control -->
+        <button id="zoomIn">Zoom +</button>
+        <button id="zoomOut">Zoom −</button>
         <!-- Additional feature buttons -->
         <button id="undo">Undo</button>
         <button id="save">Save</button>
@@ -256,6 +259,9 @@
     const saveBtn = document.getElementById('save');
     const loadBtn = document.getElementById('load');
     const gridBtn = document.getElementById('toggleGrid');
+    // Zoom in/out buttons
+    const zoomInBtn = document.getElementById('zoomIn');
+    const zoomOutBtn = document.getElementById('zoomOut');
     // Height adjustment controls
     const heightDownBtn = document.getElementById('heightDown');
     const heightUpBtn = document.getElementById('heightUp');
@@ -380,6 +386,16 @@
         zoomBtn.addEventListener('click', () => {
           zoomToExtent();
         });
+
+    // Discrete zoom controls for improved mobile usability
+    zoomInBtn.addEventListener('click', () => {
+      // Reduce camera distance by 20% but clamp to minimum to avoid flipping
+      camDist = Math.max(3, camDist * 0.8);
+    });
+    zoomOutBtn.addEventListener('click', () => {
+      // Increase camera distance by 25% but clamp to avoid excessive zoom out
+      camDist = Math.min(50, camDist * 1.25);
+    });
 
     // Undo last action
     undoBtn.addEventListener('click', () => {
@@ -577,22 +593,9 @@
             } else {
               typeName = block;
             }
-            // Skip blocks anchored to a different orientation. Blocks without anchors always render.
-            if (anchorYaw !== undefined && anchorPitch !== undefined) {
-              const yawDiff = angleDifference(yaw, anchorYaw);
-              const pitchDiff = angleDifference(pitch, anchorPitch);
-              if (yawDiff > yawAnchorThreshold || pitchDiff > pitchAnchorThreshold) {
-                return;
-              }
-            }
-            // Skip blocks anchored to a different position (translation). Blocks without position anchors always render.
-            if (anchorX !== undefined && anchorZ !== undefined) {
-              const dx = camPos.x - anchorX;
-              const dz = camPos.z - anchorZ;
-              if (Math.hypot(dx, dz) > posAnchorThreshold) {
-                return;
-              }
-            }
+            // Always render blocks regardless of the camera's current orientation or position. This
+            // change allows blocks to remain anchored in space once placed so that rotating or
+            // panning the camera will update their apparent orientation rather than hide them.
             const [bx, by, bz] = key.split(',').map(Number);
             // Define cube vertices relative to block center at (bx,by,bz)
             const verts = [
@@ -825,28 +828,18 @@
         function placeBlockGroup(baseX, baseY, baseZ) {
           // Keep track of newly placed blocks for undo history
           const placedKeys = [];
-          // Compute camera position once for all blocks in the group. This position is used for
-          // translation anchors. Blocks placed above ground will record this position to
-          // determine when they should be visible again.
+          // Blocks no longer store translation or orientation anchors. This retrieval is
+          // preserved for potential future use but has no effect on placement.
           const camPosForAnchor = getCameraPos();
           for (let dx = 0; dx < placeSize; dx++) {
             for (let dz = 0; dz < placeSize; dz++) {
               const key = `${baseX + dx},${baseY},${baseZ + dz}`;
-              if (!world.has(key)) {
-                // For ground-level blocks (y === 0), do not store anchors so they are always visible.
-                if (baseY === 0) {
-                  world.set(key, { type: currentType });
-                } else {
-                  world.set(key, {
-                    type: currentType,
-                    yawAnchor: yaw,
-                    pitchAnchor: pitch,
-                    posAnchorX: camPosForAnchor.x,
-                    posAnchorZ: camPosForAnchor.z,
-                  });
-                }
-                placedKeys.push(key);
-              }
+               if (!world.has(key)) {
+                 // Store only the block type. All blocks are always visible and anchored by
+                 // their world coordinates; no orientation or translation anchors are recorded.
+                 world.set(key, { type: currentType });
+                 placedKeys.push(key);
+               }
             }
           }
           // Record placement action if any blocks were added
