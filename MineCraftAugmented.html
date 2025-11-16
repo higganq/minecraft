@@ -1,0 +1,1264 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AR Style Voxel Game</title>
+    <style>
+      /* Base styles for body and layout */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+        background: #000;
+        font-family: sans-serif;
+        touch-action: none; /* prevent default gestures */
+      }
+
+      /* Container holds video/canvas and UI overlay */
+      #container {
+        position: relative;
+        width: 100%;
+        height: 100%;
+      }
+
+      /* Video element for camera background */
+      #camera {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        background: #202020;
+      }
+
+      /* Fallback overlay if camera is unavailable */
+      #fallback {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(135deg, #36475c, #5a6379);
+        opacity: 0.6;
+        display: none;
+      }
+
+      /* Canvas for voxel rendering */
+      #gameCanvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        touch-action: none;
+      }
+
+      /* Toolbar UI */
+      #toolbar {
+        position: absolute;
+        bottom: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 10px;
+        background: rgba(0, 0, 0, 0.5);
+        padding: 8px 12px;
+        border-radius: 8px;
+        backdrop-filter: blur(4px);
+      }
+
+      #toolbar button {
+        border: none;
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-size: 14px;
+        cursor: pointer;
+        color: #fff;
+        background: rgba(255, 255, 255, 0.2);
+        outline: none;
+        transition: background 0.2s;
+      }
+
+      #toolbar button.active {
+        background: rgba(255, 255, 255, 0.6);
+        color: #000;
+      }
+
+      #status {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        color: #fff;
+        font-size: 12px;
+        background: rgba(0, 0, 0, 0.4);
+        padding: 4px 8px;
+        border-radius: 4px;
+        pointer-events: none;
+      }
+
+      /* Height display styling */
+      #heightDisplay {
+        color: #fff;
+        display: flex;
+        align-items: center;
+        padding: 0 6px;
+        font-size: 14px;
+      }
+
+  /* Camera prompt overlay to request user permission for AR */
+  #cameraPrompt {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.75);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    color: #fff;
+    z-index: 20;
+    text-align: center;
+    padding: 20px;
+  }
+  #cameraPrompt button {
+    margin-top: 12px;
+    padding: 10px 20px;
+    font-size: 16px;
+    border: none;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.8);
+    color: #000;
+    cursor: pointer;
+  }
+      /* Mobile menu button and collapsible toolbar for small screens */
+      #menuButton {
+        position: absolute;
+        bottom: 10px;
+        left: 10px;
+        width: 44px;
+        height: 44px;
+        border: none;
+        border-radius: 6px;
+        font-size: 24px;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 10;
+        display: none;
+      }
+      @media (max-width: 600px) {
+        #menuButton {
+          display: block;
+        }
+        /* Collapse the toolbar by default on small screens. Expanded state is toggled via JS. */
+        #toolbar {
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          width: 100%;
+          transform: none;
+          max-height: 0;
+          padding: 0;
+          opacity: 0;
+          pointer-events: none;
+          transition: max-height 0.3s ease, opacity 0.3s ease;
+        }
+        /* When expanded on small screens, display as a popup overlay from the bottom.
+           The toolbar wraps items onto multiple rows and can scroll vertically. */
+        #toolbar.expanded {
+          max-height: 60vh;
+          padding: 8px 10px;
+          opacity: 1;
+          pointer-events: auto;
+          overflow-y: auto;
+          overflow-x: hidden;
+          flex-wrap: wrap;
+        }
+      }
+      @media (min-width: 601px) {
+        #menuButton {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="container">
+      <video id="camera" autoplay playsinline muted></video>
+      <div id="fallback"></div>
+      <canvas id="gameCanvas"></canvas>
+      <div id="status">Initializing...</div>
+      <!-- Prompt asking the user to enable camera. Initially hidden until needed. -->
+      <div id="cameraPrompt">
+        <p>Please enable your camera to overlay blocks in AR. Depending on your browser, camera access may require a secure (https) context or explicit permission. If your camera prompt does not appear, try hosting this file on a local web server or enabling permissions in your browser settings.</p>
+        <button id="cameraButton">Enable Camera</button>
+      </div>
+      <!-- Menu button for mobile view -->
+      <button id="menuButton">☰</button>
+      <div id="toolbar">
+        <!-- Block type buttons -->
+        <button data-type="grass" class="active">Grass</button>
+        <button data-type="stone">Stone</button>
+        <button data-type="glass">Glass</button>
+        <button data-type="wood">Wood</button>
+        <button data-type="brick">Brick</button>
+        <button data-type="road">Road</button>
+        <button data-type="sand">Sand</button>
+        <button data-type="water">Water</button>
+        <button data-type="roof">Roof</button>
+        <!-- Control buttons -->
+        <button id="reset">Reset</button>
+        <button id="zoomExtent">Zoom Extent</button>
+        <!-- Additional feature buttons -->
+        <button id="undo">Undo</button>
+        <button id="save">Save</button>
+        <button id="load">Load</button>
+        <button id="toggleGrid">Grid</button>
+        <!-- Size selection buttons -->
+        <button data-size="1" class="size active">1×1</button>
+        <button data-size="2" class="size">2×2</button>
+        <button data-size="3" class="size">3×3</button>
+        <!-- Height adjustment controls -->
+        <button id="heightDown">−</button>
+        <span id="heightDisplay">H: 0</span>
+        <button id="heightUp">＋</button>
+      </div>
+    </div>
+    <script>
+      (function () {
+        'use strict';
+
+        /*
+         * AR-style voxel game implementation
+         * This script runs entirely in the browser with no external dependencies.
+         * It uses an HTML5 canvas in 2D mode to render a simple 3D scene of cubes.
+         * The camera background attempts to show the user's camera via getUserMedia;
+         * if not available, a gradient fallback is displayed.
+         */
+
+        // DOM elements
+        const video = document.getElementById('camera');
+        const fallbackOverlay = document.getElementById('fallback');
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const status = document.getElementById('status');
+        const toolbar = document.getElementById('toolbar');
+        const resetBtn = document.getElementById('reset');
+        const zoomBtn = document.getElementById('zoomExtent');
+    // Additional buttons for new features
+    const undoBtn = document.getElementById('undo');
+    const saveBtn = document.getElementById('save');
+    const loadBtn = document.getElementById('load');
+    const gridBtn = document.getElementById('toggleGrid');
+    // Height adjustment controls
+    const heightDownBtn = document.getElementById('heightDown');
+    const heightUpBtn = document.getElementById('heightUp');
+    const heightDisplay = document.getElementById('heightDisplay');
+    // Menu button for collapsing/expanding the toolbar on small screens
+    const menuButton = document.getElementById('menuButton');
+
+        // Elements for camera permission prompt
+        const cameraPrompt = document.getElementById('cameraPrompt');
+        const cameraButton = document.getElementById('cameraButton');
+
+        // Game state
+        const world = new Map(); // key -> block object {type, yawAnchor?, pitchAnchor?}
+        let currentType = 'grass';
+        let placeSize = 1; // size of placement (1×1, 2×2, 3×3)
+    // History of actions for undo functionality
+    let history = [];
+    // Whether to draw grid lines on the ground plane
+    let showGrid = false;
+    // Preview cell for ghost block placement
+    let previewCell = null;
+
+    // Height offset for placement on ground plane. Allows building at different Y levels.
+    let heightOffset = 0;
+
+    // Store midpoint and lookAt for panning (two-finger drag)
+    let startMidPoint = null;
+    let startLookAt = null;
+        // Orientation anchor thresholds (radians). Blocks with anchors will only render if current camera
+        // orientation is within these thresholds of their anchor orientation. This simulates spatial awareness.
+        const yawAnchorThreshold = Math.PI / 9;   // ~20 degrees
+        const pitchAnchorThreshold = Math.PI / 6; // ~30 degrees
+        // Threshold (in world units) for translation anchors. Blocks will only render
+        // if the current camera position is within this distance of the position
+        // where the block was created. This helps simulate spatial anchoring.
+        const posAnchorThreshold = 4;
+
+        // Flag to track whether the camera has been initialized. The camera API often
+        // requires a user gesture to start on mobile devices, so we call initCamera()
+        // on the first user interaction if it hasn't already been started successfully.
+        let cameraInitialized = false;
+
+        // Helper functions for camera permission prompt
+        function showCameraPrompt() {
+          cameraPrompt.style.display = 'flex';
+        }
+        function hideCameraPrompt() {
+          cameraPrompt.style.display = 'none';
+        }
+
+        // Compute the absolute difference between two angles, wrapping around 2π.
+        function angleDifference(a, b) {
+          let diff = Math.abs(a - b) % (2 * Math.PI);
+          return diff > Math.PI ? 2 * Math.PI - diff : diff;
+        }
+        const blockTypes = {
+          grass: { color: { r: 95, g: 159, b: 53 } }, // greenish
+          stone: { color: { r: 120, g: 120, b: 120 } }, // grey
+          glass: { color: { r: 180, g: 220, b: 255 }, transparent: true }, // light blue semi-transparent
+          wood: { color: { r: 153, g: 101, b: 21 } }, // brown wood
+          brick: { color: { r: 181, g: 58, b: 40 } }, // reddish brick
+          road: { color: { r: 60, g: 60, b: 60 } }, // dark grey road
+        sand: { color: { r: 194, g: 178, b: 128 } }, // light yellow sand
+        water: { color: { r: 64, g: 164, b: 223 }, transparent: true }, // blue semi-transparent water
+        roof: { color: { r: 165, g: 42, b: 42 } }, // reddish-brown roof
+        };
+
+        // Camera parameters
+        let yaw = Math.PI / 4; // horizontal rotation
+        let pitch = -Math.PI / 6; // vertical rotation
+        let camDist = 8; // distance from lookAt point
+        const lookAt = { x: 0, y: 0.5, z: 0 }; // center of world (slightly raised)
+        const fov = Math.PI / 3; // 60 degrees field of view
+
+        // Interaction state
+        let isDragging = false;
+        let pointerId = null;
+        let startX = 0;
+        let startY = 0;
+        let startYaw = 0;
+        let startPitch = 0;
+        let pinchStartDist = 0;
+        let startCamDist = camDist;
+        let pointerPositions = {}; // track multiple pointers for pinch
+
+        // Precomputed faces for picking
+        let lastFaces = [];
+
+        // Set up UI event handlers
+        toolbar.addEventListener('click', (e) => {
+          const btn = e.target;
+          if (btn.tagName === 'BUTTON') {
+            const type = btn.getAttribute('data-type');
+            const sizeAttr = btn.getAttribute('data-size');
+            if (type) {
+              currentType = type;
+              // Highlight selected block type; remove active from all type buttons
+              Array.from(toolbar.querySelectorAll('button[data-type]')).forEach((b) => b.classList.remove('active'));
+              btn.classList.add('active');
+            } else if (sizeAttr) {
+              // Update placement size
+              const newSize = parseInt(sizeAttr, 10);
+              if (!isNaN(newSize)) {
+                placeSize = newSize;
+                // Highlight selected size
+                Array.from(toolbar.querySelectorAll('button[data-size]')).forEach((b) => b.classList.remove('active'));
+                btn.classList.add('active');
+              }
+            }
+          }
+        });
+
+        resetBtn.addEventListener('click', () => {
+          world.clear();
+          // Reinitialize ground plane after clearing
+          initGround(5);
+      // Clear history on reset
+      history = [];
+        });
+
+        // Zoom to fit all voxels in view
+        zoomBtn.addEventListener('click', () => {
+          zoomToExtent();
+        });
+
+    // Undo last action
+    undoBtn.addEventListener('click', () => {
+      undoLastAction();
+    });
+
+    // Save the current world to localStorage
+    saveBtn.addEventListener('click', () => {
+      saveWorld();
+    });
+
+    // Load the world from localStorage
+    loadBtn.addEventListener('click', () => {
+      loadWorld();
+    });
+
+    // Toggle grid visibility
+    gridBtn.addEventListener('click', () => {
+      showGrid = !showGrid;
+      gridBtn.classList.toggle('active', showGrid);
+    });
+
+    // Collapse/expand toolbar when the mobile menu button is clicked
+    menuButton.addEventListener('click', () => {
+      toolbar.classList.toggle('expanded');
+      // Start camera on menu interaction if it hasn't been initialized yet
+      if (!cameraInitialized) {
+        initCamera();
+      }
+    });
+
+    // Handle camera enable button in the camera prompt
+    cameraButton.addEventListener('click', () => {
+      // Hide the prompt immediately to reveal the game area while requesting camera
+      hideCameraPrompt();
+      if (!cameraInitialized) {
+        initCamera();
+      }
+    });
+
+    // Adjust height offset for placement on ground plane
+    function updateHeightDisplay() {
+      heightDisplay.textContent = `H: ${heightOffset}`;
+    }
+    heightUpBtn.addEventListener('click', () => {
+      heightOffset = Math.min(heightOffset + 1, 10);
+      updateHeightDisplay();
+    });
+    heightDownBtn.addEventListener('click', () => {
+      heightOffset = Math.max(heightOffset - 1, -10);
+      updateHeightDisplay();
+    });
+
+        // Resize canvas to fill the screen
+        function resizeCanvas() {
+          canvas.width = canvas.clientWidth;
+          canvas.height = canvas.clientHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Try to start camera for background
+        async function initCamera() {
+          try {
+            // Prefer the back camera (environment) if available
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            video.srcObject = stream;
+            await video.play();
+            fallbackOverlay.style.display = 'none';
+            cameraInitialized = true;
+            // Hide the camera prompt on success
+            hideCameraPrompt();
+          } catch (err) {
+            console.warn('Environment camera unavailable or denied, trying default camera.', err);
+            try {
+              // Fall back to any available camera
+              const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+              video.srcObject = stream;
+              await video.play();
+              fallbackOverlay.style.display = 'none';
+              cameraInitialized = true;
+              // Hide the camera prompt on success
+              hideCameraPrompt();
+            } catch (err2) {
+              // All camera requests failed or permission denied
+              fallbackOverlay.style.display = 'block';
+              console.warn('Camera unavailable:', err2);
+              // Inform the user that the camera is unavailable and show the prompt
+              cameraPrompt.querySelector('p').textContent =
+                'Camera unavailable or permission denied. The game will use a fallback background. Please ensure your device has a camera and that you have granted permission. Some browsers block camera access for local files; hosting this file via https or a local server can help.';
+              showCameraPrompt();
+            }
+          }
+        }
+        // Do not automatically start the camera on load. Many mobile browsers require
+        // a user gesture (e.g., a tap) to grant camera access. Instead, we call
+        // initCamera() on the first user interaction (pointerdown or menu click).
+
+        // Helper: compute camera position from yaw/pitch/distance
+        function getCameraPos() {
+          const x = lookAt.x + camDist * Math.cos(pitch) * Math.sin(yaw);
+          const y = lookAt.y + camDist * Math.sin(pitch);
+          const z = lookAt.z + camDist * Math.cos(pitch) * Math.cos(yaw);
+          return { x, y, z };
+        }
+
+        // Helper: transform world coordinates to camera space
+        function worldToCamera(pt, camPos) {
+          // Translate relative to camera
+          let dx = pt.x - camPos.x;
+          let dy = pt.y - camPos.y;
+          let dz = pt.z - camPos.z;
+          // Apply inverse yaw rotation (rotate around Y)
+          const cosy = Math.cos(-yaw);
+          const siny = Math.sin(-yaw);
+          let x1 = cosy * dx - siny * dz;
+          let z1 = siny * dx + cosy * dz;
+          let y1 = dy;
+          // Apply inverse pitch rotation (rotate around X)
+          const cosp = Math.cos(-pitch);
+          const sinp = Math.sin(-pitch);
+          let y2 = cosp * y1 - sinp * z1;
+          let z2 = sinp * y1 + cosp * z1;
+          return { x: x1, y: y2, z: z2 };
+        }
+
+        // Helper: convert camera space to screen space
+        function cameraToScreen(pt, width, height) {
+          // Perspective projection: note that z should be positive in front of camera
+          const aspect = width / height;
+          const f = 1 / Math.tan(fov / 2);
+          const ndcX = (pt.x * f) / (pt.z * aspect);
+          const ndcY = (pt.y * f) / pt.z;
+          const screenX = (ndcX + 1) * 0.5 * width;
+          const screenY = (1 - (ndcY + 1) * 0.5) * height;
+          return { x: screenX, y: screenY };
+        }
+
+        // Helper: compute vector dot product
+        function dot(a, b) {
+          return a.x * b.x + a.y * b.y + a.z * b.z;
+        }
+
+        // Rendering loop
+        let lastTime = performance.now();
+        let frameCount = 0;
+        let fps = 0;
+        function render() {
+          requestAnimationFrame(render);
+          // FPS calculation
+          const now = performance.now();
+          frameCount++;
+          if (now - lastTime > 1000) {
+            fps = frameCount;
+            frameCount = 0;
+            lastTime = now;
+          }
+          const { width, height } = canvas;
+          ctx.clearRect(0, 0, width, height);
+          const camPos = getCameraPos();
+
+          // Precompute light direction in camera space
+          const lightDirWorld = { x: -0.5, y: 1, z: -0.5 };
+          // Normalize light direction
+          const mag = Math.hypot(lightDirWorld.x, lightDirWorld.y, lightDirWorld.z);
+          const lightDir = {
+            x: lightDirWorld.x / mag,
+            y: lightDirWorld.y / mag,
+            z: lightDirWorld.z / mag,
+          };
+          // Rotate light direction into camera space (inverse yaw and pitch)
+          const ldCam = worldToCamera(
+            { x: camPos.x + lightDir.x, y: camPos.y + lightDir.y, z: camPos.z + lightDir.z },
+            camPos
+          );
+          const ldCamMag = Math.hypot(ldCam.x, ldCam.y, ldCam.z);
+          const lightCamDir = { x: ldCam.x / ldCamMag, y: ldCam.y / ldCamMag, z: ldCam.z / ldCamMag };
+
+          // Collect visible faces
+          const faces = [];
+          // Iterate over world blocks
+          world.forEach((block, key) => {
+            // Determine block type and orientation anchors (if any)
+            let typeName;
+            let anchorYaw;
+            let anchorPitch;
+            let anchorX;
+            let anchorZ;
+            if (typeof block === 'object') {
+              typeName = block.type;
+              anchorYaw = block.yawAnchor;
+              anchorPitch = block.pitchAnchor;
+              anchorX = block.posAnchorX;
+              anchorZ = block.posAnchorZ;
+            } else {
+              typeName = block;
+            }
+            // Skip blocks anchored to a different orientation. Blocks without anchors always render.
+            if (anchorYaw !== undefined && anchorPitch !== undefined) {
+              const yawDiff = angleDifference(yaw, anchorYaw);
+              const pitchDiff = angleDifference(pitch, anchorPitch);
+              if (yawDiff > yawAnchorThreshold || pitchDiff > pitchAnchorThreshold) {
+                return;
+              }
+            }
+            // Skip blocks anchored to a different position (translation). Blocks without position anchors always render.
+            if (anchorX !== undefined && anchorZ !== undefined) {
+              const dx = camPos.x - anchorX;
+              const dz = camPos.z - anchorZ;
+              if (Math.hypot(dx, dz) > posAnchorThreshold) {
+                return;
+              }
+            }
+            const [bx, by, bz] = key.split(',').map(Number);
+            // Define cube vertices relative to block center at (bx,by,bz)
+            const verts = [
+              { x: bx - 0.5, y: by - 0.5, z: bz - 0.5 },
+              { x: bx + 0.5, y: by - 0.5, z: bz - 0.5 },
+              { x: bx + 0.5, y: by + 0.5, z: bz - 0.5 },
+              { x: bx - 0.5, y: by + 0.5, z: bz - 0.5 },
+              { x: bx - 0.5, y: by - 0.5, z: bz + 0.5 },
+              { x: bx + 0.5, y: by - 0.5, z: bz + 0.5 },
+              { x: bx + 0.5, y: by + 0.5, z: bz + 0.5 },
+              { x: bx - 0.5, y: by + 0.5, z: bz + 0.5 },
+            ];
+            // Face definitions: [vertex indices], normal vector in world space
+            const cubeFaces = [
+              { idx: [0, 1, 2, 3], normal: { x: 0, y: 0, z: -1 } }, // back
+              { idx: [4, 5, 6, 7], normal: { x: 0, y: 0, z: 1 } }, // front
+              { idx: [0, 1, 5, 4], normal: { x: 0, y: -1, z: 0 } }, // bottom
+              { idx: [3, 2, 6, 7], normal: { x: 0, y: 1, z: 0 } }, // top
+              { idx: [1, 2, 6, 5], normal: { x: 1, y: 0, z: 0 } }, // right
+              { idx: [0, 3, 7, 4], normal: { x: -1, y: 0, z: 0 } }, // left
+            ];
+            // Transform vertices to camera space and skip cube if all vertices behind camera
+            const camVerts = verts.map((v) => worldToCamera(v, camPos));
+            // Determine if cube is visible (any vertex has z > 0)
+            if (!camVerts.some((v) => v.z > 0)) return;
+            cubeFaces.forEach((face) => {
+              // Determine if face is visible: normal pointing towards camera in camera space
+              // Transform normal to camera space (approx by rotating point on face center slightly offset by normal)
+              const worldCenter = {
+                x: bx + face.normal.x * 0.5,
+                y: by + face.normal.y * 0.5,
+                z: bz + face.normal.z * 0.5,
+              };
+              const camCenter = worldToCamera(worldCenter, camPos);
+              // If face center behind camera, skip
+              if (camCenter.z <= 0) return;
+              // Compute face normal in camera space by subtracting camera-space block center and camera-space adjacent point
+              // For shading dot product (approx) we use world normal rotated into camera space by same rotations
+              // Here we convert world normal directly into camera space using yaw & pitch inverse
+              const nCam = worldToCamera(
+                {
+                  x: camPos.x + face.normal.x,
+                  y: camPos.y + face.normal.y,
+                  z: camPos.z + face.normal.z,
+                },
+                camPos
+              );
+              const nLen = Math.hypot(nCam.x, nCam.y, nCam.z);
+              const normalCam = { x: nCam.x / nLen, y: nCam.y / nLen, z: nCam.z / nLen };
+              // Check if face normal is facing camera (dot with camera forward axis 0,0,1 in camera space negative)
+              if (normalCam.z >= 0) return; // face turned away
+              // Project vertices to screen
+              const pts = face.idx.map((i) => {
+                const p = camVerts[i];
+                return cameraToScreen(p, width, height);
+              });
+              // Compute depth for painter's algorithm (average z)
+              const depth = face.idx.reduce((acc, i) => acc + camVerts[i].z, 0) / 4;
+              // Lighting: dot between face normal (world) and light direction (camera space)
+              const lightDot = Math.max(0, -dot(normalCam, lightCamDir));
+              // Determine color (with slight brightness)
+              const baseColor = blockTypes[typeName].color;
+              const brightness = 0.3 + 0.7 * lightDot;
+              const r = Math.round(baseColor.r * brightness);
+              const g = Math.round(baseColor.g * brightness);
+              const b = Math.round(baseColor.b * brightness);
+              // Determine alpha for semi-transparent blocks (glass)
+              const alpha = blockTypes[typeName].transparent ? 0.5 : 1;
+              faces.push({
+                pts,
+                depth,
+                color: `rgba(${r},${g},${b},${alpha})`,
+                blockKey: key,
+                normal: face.normal,
+              });
+            });
+          });
+          // Sort faces by depth (far to near)
+          faces.sort((a, b) => b.depth - a.depth);
+          lastFaces = faces;
+          // Draw faces
+          faces.forEach((f) => {
+            ctx.beginPath();
+            ctx.moveTo(f.pts[0].x, f.pts[0].y);
+            for (let i = 1; i < f.pts.length; i++) {
+              ctx.lineTo(f.pts[i].x, f.pts[i].y);
+            }
+            ctx.closePath();
+            ctx.fillStyle = f.color;
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          });
+          // Optionally draw grid lines on ground plane
+          if (showGrid) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+            ctx.lineWidth = 1;
+            world.forEach((block, key) => {
+              const [gx, gy, gz] = key.split(',').map(Number);
+              if (gy !== 0) return;
+              // Define corner points for cell edges at y=0
+              const corners = [
+                { x: gx - 0.5, y: gy + 0.001, z: gz - 0.5 },
+                { x: gx + 0.5, y: gy + 0.001, z: gz - 0.5 },
+                { x: gx + 0.5, y: gy + 0.001, z: gz + 0.5 },
+                { x: gx - 0.5, y: gy + 0.001, z: gz + 0.5 },
+              ];
+              // Transform to camera space and ensure some part is visible
+              const camCorners = corners.map((c) => worldToCamera(c, camPos));
+              if (!camCorners.some((v) => v.z > 0)) return;
+              // Project to screen
+              const ptsGrid = camCorners.map((p) => cameraToScreen(p, width, height));
+              // Draw edges
+              ctx.beginPath();
+              ctx.moveTo(ptsGrid[0].x, ptsGrid[0].y);
+              for (let i = 1; i < ptsGrid.length; i++) {
+                ctx.lineTo(ptsGrid[i].x, ptsGrid[i].y);
+              }
+              ctx.closePath();
+              ctx.stroke();
+            });
+          }
+          // Draw preview ghost block if available
+          if (previewCell) {
+            const baseX = previewCell.x;
+            const baseY = previewCell.y;
+            const baseZ = previewCell.z;
+            const facesPrev = [];
+            // Iterate over group cells for preview
+            for (let dx = 0; dx < placeSize; dx++) {
+              for (let dz = 0; dz < placeSize; dz++) {
+                const bx = baseX + dx;
+                const by = baseY;
+                const bz = baseZ + dz;
+                // Define cube vertices for preview cell
+                const vertsPrev = [
+                  { x: bx - 0.5, y: by - 0.5, z: bz - 0.5 },
+                  { x: bx + 0.5, y: by - 0.5, z: bz - 0.5 },
+                  { x: bx + 0.5, y: by + 0.5, z: bz - 0.5 },
+                  { x: bx - 0.5, y: by + 0.5, z: bz - 0.5 },
+                  { x: bx - 0.5, y: by - 0.5, z: bz + 0.5 },
+                  { x: bx + 0.5, y: by - 0.5, z: bz + 0.5 },
+                  { x: bx + 0.5, y: by + 0.5, z: bz + 0.5 },
+                  { x: bx - 0.5, y: by + 0.5, z: bz + 0.5 },
+                ];
+                const camVertsPrev = vertsPrev.map((v) => worldToCamera(v, camPos));
+                // Skip if cube is entirely behind camera
+                if (!camVertsPrev.some((v) => v.z > 0)) continue;
+                const cubeFacesPrev = [
+                  { idx: [0, 1, 2, 3], normal: { x: 0, y: 0, z: -1 } },
+                  { idx: [4, 5, 6, 7], normal: { x: 0, y: 0, z: 1 } },
+                  { idx: [0, 1, 5, 4], normal: { x: 0, y: -1, z: 0 } },
+                  { idx: [3, 2, 6, 7], normal: { x: 0, y: 1, z: 0 } },
+                  { idx: [1, 2, 6, 5], normal: { x: 1, y: 0, z: 0 } },
+                  { idx: [0, 3, 7, 4], normal: { x: -1, y: 0, z: 0 } },
+                ];
+                cubeFacesPrev.forEach((face) => {
+                  const worldCenter = {
+                    x: bx + face.normal.x * 0.5,
+                    y: by + face.normal.y * 0.5,
+                    z: bz + face.normal.z * 0.5,
+                  };
+                  const camCenter = worldToCamera(worldCenter, camPos);
+                  if (camCenter.z <= 0) return;
+                  const nCam = worldToCamera(
+                    { x: camPos.x + face.normal.x, y: camPos.y + face.normal.y, z: camPos.z + face.normal.z },
+                    camPos
+                  );
+                  const nLen = Math.hypot(nCam.x, nCam.y, nCam.z);
+                  const normalCam = { x: nCam.x / nLen, y: nCam.y / nLen, z: nCam.z / nLen };
+                  if (normalCam.z >= 0) return;
+                  const ptsPrev = face.idx.map((i) => cameraToScreen(camVertsPrev[i], width, height));
+                  const depthPrev = face.idx.reduce((acc, i) => acc + camVertsPrev[i].z, 0) / 4;
+                  const baseC = blockTypes[currentType].color;
+                  const brightnessPrev = 0.5;
+                  const rP = Math.round(baseC.r * brightnessPrev);
+                  const gP = Math.round(baseC.g * brightnessPrev);
+                  const bP = Math.round(baseC.b * brightnessPrev);
+                  facesPrev.push({ pts: ptsPrev, depth: depthPrev, color: `rgba(${rP},${gP},${bP},0.3)` });
+                });
+              }
+            }
+            facesPrev.sort((a, b) => b.depth - a.depth);
+            facesPrev.forEach((f2) => {
+              ctx.beginPath();
+              ctx.moveTo(f2.pts[0].x, f2.pts[0].y);
+              for (let i = 1; i < f2.pts.length; i++) {
+                ctx.lineTo(f2.pts[i].x, f2.pts[i].y);
+              }
+              ctx.closePath();
+              ctx.fillStyle = f2.color;
+              ctx.fill();
+            });
+          }
+          // Draw FPS/status
+          status.textContent = `FPS: ${fps} | Blocks: ${world.size}`;
+        }
+        requestAnimationFrame(render);
+
+        // Helper: check if point is inside polygon (simple winding algorithm)
+        function pointInPolygon(px, py, pts) {
+          let inside = false;
+          for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+            const xi = pts[i].x,
+              yi = pts[i].y;
+            const xj = pts[j].x,
+              yj = pts[j].y;
+            const intersect = yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi;
+            if (intersect) inside = !inside;
+          }
+          return inside;
+        }
+
+        // Determine highest Y at given x,z coordinate
+        function highestY(x, z) {
+          let max = -1;
+          world.forEach((_, key) => {
+            const [bx, by, bz] = key.split(',').map(Number);
+            if (bx === x && bz === z) {
+              if (by > max) max = by;
+            }
+          });
+          return max;
+        }
+
+        // Place blocks of the currently selected type at a base location, filling a square of
+        // size (placeSize × placeSize) at the given world coordinates. Each block is anchored to the current
+        // camera orientation (yaw/pitch) so that it only appears when viewing the world from a similar direction.
+        function placeBlockGroup(baseX, baseY, baseZ) {
+          // Keep track of newly placed blocks for undo history
+          const placedKeys = [];
+          // Compute camera position once for all blocks in the group. This position is used for
+          // translation anchors. Blocks placed above ground will record this position to
+          // determine when they should be visible again.
+          const camPosForAnchor = getCameraPos();
+          for (let dx = 0; dx < placeSize; dx++) {
+            for (let dz = 0; dz < placeSize; dz++) {
+              const key = `${baseX + dx},${baseY},${baseZ + dz}`;
+              if (!world.has(key)) {
+                // For ground-level blocks (y === 0), do not store anchors so they are always visible.
+                if (baseY === 0) {
+                  world.set(key, { type: currentType });
+                } else {
+                  world.set(key, {
+                    type: currentType,
+                    yawAnchor: yaw,
+                    pitchAnchor: pitch,
+                    posAnchorX: camPosForAnchor.x,
+                    posAnchorZ: camPosForAnchor.z,
+                  });
+                }
+                placedKeys.push(key);
+              }
+            }
+          }
+          // Record placement action if any blocks were added
+          if (placedKeys.length > 0) {
+            history.push({ type: 'place', blocks: placedKeys });
+          }
+        }
+
+        // Compute world direction vector given screen coordinates
+        function screenToWorldDirection(x, y) {
+          const { width, height } = canvas;
+          // Convert pixel to Normalized Device Coordinates [-1,1]
+          const xN = (2 * x) / width - 1;
+          const yN = 1 - (2 * y) / height;
+          // Direction in camera space
+          const aspect = width / height;
+          const f = 1 / Math.tan(fov / 2);
+          const dirCam = {
+            x: (xN / f) * aspect,
+            y: (yN / f),
+            z: 1,
+          };
+          // Rotate into world space (inverse yaw/pitch)
+          // Apply pitch rotation first
+          const cosPitch = Math.cos(pitch);
+          const sinPitch = Math.sin(pitch);
+          let y1 = cosPitch * dirCam.y + sinPitch * dirCam.z;
+          let z1 = -sinPitch * dirCam.y + cosPitch * dirCam.z;
+          let x1 = dirCam.x;
+          // Apply yaw rotation
+          const cosYaw = Math.cos(yaw);
+          const sinYaw = Math.sin(yaw);
+          const x2 = cosYaw * x1 + sinYaw * z1;
+          const z2 = -sinYaw * x1 + cosYaw * z1;
+          const y2 = y1;
+          const dirWorld = { x: x2, y: y2, z: z2 };
+          // Normalize direction
+          const len = Math.hypot(dirWorld.x, dirWorld.y, dirWorld.z);
+          return { x: dirWorld.x / len, y: dirWorld.y / len, z: dirWorld.z / len };
+        }
+
+        // Cast ray from screen and find intersection with plane y=0 (used for placing on ground)
+        function screenToGridPlane(x, y) {
+          const dir = screenToWorldDirection(x, y);
+          const camPos = getCameraPos();
+          if (Math.abs(dir.y) < 1e-6) return null;
+          const t = (0 - camPos.y) / dir.y;
+          if (t <= 0) return null;
+          return {
+            x: camPos.x + dir.x * t,
+            z: camPos.z + dir.z * t,
+          };
+        }
+
+        // Compute a camera distance that fits the entire voxel world into view.
+        function zoomToExtent() {
+          if (world.size === 0) return;
+          let minX = Infinity, minY = Infinity, minZ = Infinity;
+          let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+          world.forEach((_, key) => {
+            const [x, y, z] = key.split(',').map(Number);
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z;
+            if (z > maxZ) maxZ = z;
+          });
+          // Compute extents (+1 to include block size)
+          const extentX = maxX - minX + 1;
+          const extentY = maxY - minY + 1;
+          const extentZ = maxZ - minZ + 1;
+          const maxExtent = Math.max(extentX, extentY, extentZ);
+          // Estimate new camera distance: proportional to extent and FOV
+          // tan(FOV/2) = half-height / distance => distance = half-height / tan(FOV/2)
+          const half = maxExtent / 2;
+          const margin = 2;
+          // Use horizontal extents for width; choose conservative value using maxExtent
+          camDist = half / Math.sin(fov / 2) + margin;
+        }
+
+        // Find the first empty voxel along the ray (for placing in 3D space)
+        function findEmptyCellAlongRay(origin, dir, maxSteps = 20) {
+          // Current cell coordinates (floor)
+          let x = Math.floor(origin.x);
+          let y = Math.floor(origin.y);
+          let z = Math.floor(origin.z);
+          // Step direction per axis
+          const stepX = dir.x > 0 ? 1 : -1;
+          const stepY = dir.y > 0 ? 1 : -1;
+          const stepZ = dir.z > 0 ? 1 : -1;
+          // Compute initial boundary distances
+          const nextX = x + (stepX > 0 ? 1 : 0);
+          const nextY = y + (stepY > 0 ? 1 : 0);
+          const nextZ = z + (stepZ > 0 ? 1 : 0);
+          let tMaxX = (dir.x !== 0) ? (nextX - origin.x) / dir.x : Infinity;
+          let tMaxY = (dir.y !== 0) ? (nextY - origin.y) / dir.y : Infinity;
+          let tMaxZ = (dir.z !== 0) ? (nextZ - origin.z) / dir.z : Infinity;
+          const tDeltaX = (dir.x !== 0) ? Math.abs(1 / dir.x) : Infinity;
+          const tDeltaY = (dir.y !== 0) ? Math.abs(1 / dir.y) : Infinity;
+          const tDeltaZ = (dir.z !== 0) ? Math.abs(1 / dir.z) : Infinity;
+          // Traverse voxels along ray
+          for (let i = 0; i < maxSteps; i++) {
+            // Step to next cell boundary before checking occupancy to skip origin cell
+            if (tMaxX < tMaxY) {
+              if (tMaxX < tMaxZ) {
+                x += stepX;
+                tMaxX += tDeltaX;
+              } else {
+                z += stepZ;
+                tMaxZ += tDeltaZ;
+              }
+            } else {
+              if (tMaxY < tMaxZ) {
+                y += stepY;
+                tMaxY += tDeltaY;
+              } else {
+                z += stepZ;
+                tMaxZ += tDeltaZ;
+              }
+            }
+            // After moving, check current cell for emptiness
+            if (!world.has(`${x},${y},${z}`) && y >= 0) {
+              return { x, y, z };
+            }
+          }
+          return null;
+        }
+
+        // Compute preview cell for ghost placement given screen coordinates
+        function computePreview(screenX, screenY) {
+          // Attempt to find the first empty voxel along the ray from the camera through the screen point
+          const origin = getCameraPos();
+          const dir = screenToWorldDirection(screenX, screenY);
+          const empty = findEmptyCellAlongRay(origin, dir, 40);
+          if (empty) {
+            return empty;
+          }
+          // Fallback: intersect ray with ground plane and place block on top of the highest stack
+          const grid = screenToGridPlane(screenX, screenY);
+          if (!grid) return null;
+          const gx = Math.round(grid.x);
+          const gz = Math.round(grid.z);
+          const h = highestY(gx, gz) + 1 + heightOffset;
+          return { x: gx, y: h, z: gz };
+        }
+
+        // Save current world state to localStorage as JSON
+        function saveWorld() {
+          try {
+            const data = [];
+            world.forEach((block, key) => {
+              data.push({ key, block });
+            });
+            localStorage.setItem('voxelWorld', JSON.stringify(data));
+            status.textContent = 'World saved';
+          } catch (err) {
+            console.warn('Error saving world:', err);
+          }
+        }
+
+        // Load world state from localStorage
+        function loadWorld() {
+          const json = localStorage.getItem('voxelWorld');
+          if (!json) {
+            status.textContent = 'No saved world found';
+            return;
+          }
+          try {
+            const data = JSON.parse(json);
+            world.clear();
+            data.forEach(({ key, block }) => {
+              world.set(key, block);
+            });
+            status.textContent = 'World loaded';
+            history = [];
+          } catch (err) {
+            console.warn('Error loading world:', err);
+            status.textContent = 'Failed to load world';
+          }
+        }
+
+        // Undo the most recent placement or removal action
+        function undoLastAction() {
+          const action = history.pop();
+          if (!action) return;
+          if (action.type === 'place') {
+            // Remove placed blocks
+            action.blocks.forEach((key) => {
+              world.delete(key);
+            });
+          } else if (action.type === 'remove') {
+            // Restore removed blocks
+            action.blocks.forEach(({ key, block }) => {
+              world.set(key, block);
+            });
+          }
+        }
+
+        // Pointer/gesture handlers
+        canvas.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          // Start the camera on first user interaction if it hasn't been initialized successfully.
+          if (!cameraInitialized) {
+            initCamera();
+          }
+          if (pointerId === null) {
+            // First pointer -> rotation/drag
+            pointerId = e.pointerId;
+            isDragging = false;
+            startX = e.clientX;
+            startY = e.clientY;
+            startYaw = yaw;
+            startPitch = pitch;
+          }
+          pointerPositions[e.pointerId] = { x: e.clientX, y: e.clientY };
+          if (Object.keys(pointerPositions).length === 2) {
+            // Pinch start
+            const ids = Object.keys(pointerPositions);
+            const p1 = pointerPositions[ids[0]];
+            const p2 = pointerPositions[ids[1]];
+            const dx = p1.x - p2.x;
+            const dy = p1.y - p2.y;
+            pinchStartDist = Math.hypot(dx, dy);
+            startCamDist = camDist;
+
+            // Record midpoint and lookAt for panning
+            startMidPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+            startLookAt = { x: lookAt.x, z: lookAt.z };
+          }
+        });
+
+        canvas.addEventListener('pointermove', (e) => {
+          e.preventDefault();
+          if (pointerId !== null && e.pointerId === pointerId) {
+            // Primary pointer
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            if (!isDragging && Math.hypot(dx, dy) > 5) {
+              isDragging = true;
+            }
+            if (isDragging) {
+              // Update yaw/pitch for drag
+              const sensitivity = 0.005;
+              yaw = startYaw - dx * sensitivity;
+              pitch = startPitch - dy * sensitivity;
+              // Clamp pitch to avoid flipping
+              const limit = Math.PI / 2 - 0.01;
+              if (pitch > limit) pitch = limit;
+              if (pitch < -limit) pitch = -limit;
+            }
+            pointerPositions[e.pointerId] = { x: e.clientX, y: e.clientY };
+          }
+          // Pinch gesture
+          if (Object.keys(pointerPositions).length === 2) {
+            const ids = Object.keys(pointerPositions);
+            const p1 = pointerPositions[ids[0]];
+            const p2 = pointerPositions[ids[1]];
+            const dxDist = p1.x - p2.x;
+            const dyDist = p1.y - p2.y;
+            const dist = Math.hypot(dxDist, dyDist);
+            const pinchRatio = dist / pinchStartDist;
+            camDist = Math.max(3, Math.min(20, startCamDist / pinchRatio));
+            // Panning: shift lookAt based on change in midpoint
+            if (startMidPoint && startLookAt) {
+              const curMid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+              const dxMid = curMid.x - startMidPoint.x;
+              const dyMid = curMid.y - startMidPoint.y;
+              // Convert pixel movement to world units based on camera distance and FOV
+              const { width, height } = canvas;
+              const unitsPerPixelY = (2 * camDist * Math.tan(fov / 2)) / height;
+              const unitsPerPixelX = unitsPerPixelY * (width / height);
+              // World right and forward (horizontal plane) directions
+              const rightDir = { x: Math.cos(yaw), z: -Math.sin(yaw) };
+              const forwardDir = { x: Math.sin(yaw), z: Math.cos(yaw) };
+              const shiftX = (-dxMid * unitsPerPixelX) * rightDir.x + (dyMid * unitsPerPixelY) * forwardDir.x;
+              const shiftZ = (-dxMid * unitsPerPixelX) * rightDir.z + (dyMid * unitsPerPixelY) * forwardDir.z;
+              lookAt.x = startLookAt.x + shiftX;
+              lookAt.z = startLookAt.z + shiftZ;
+            }
+          }
+
+          // Update preview placement only when not dragging and a single pointer is active
+          const activePointers = Object.keys(pointerPositions);
+          if (!isDragging && activePointers.length === 1 && e.pointerId === pointerId) {
+            const rect2 = canvas.getBoundingClientRect();
+            const sx = e.clientX - rect2.left;
+            const sy = e.clientY - rect2.top;
+            previewCell = computePreview(sx, sy);
+          } else {
+            previewCell = null;
+          }
+        });
+
+        canvas.addEventListener('pointerup', (e) => {
+          e.preventDefault();
+          delete pointerPositions[e.pointerId];
+          if (e.pointerId === pointerId) {
+            // Primary pointer ended
+            if (!isDragging) {
+              // It's a tap, handle placement/removal
+              handleTap(e.clientX, e.clientY);
+            }
+            pointerId = null;
+            isDragging = false;
+          }
+          // Reset pan start if fewer than two pointers remain
+          if (Object.keys(pointerPositions).length < 2) {
+            startMidPoint = null;
+            startLookAt = null;
+          }
+          // Clear preview after pointer up
+          previewCell = null;
+        });
+
+        canvas.addEventListener('pointercancel', (e) => {
+          delete pointerPositions[e.pointerId];
+          if (e.pointerId === pointerId) {
+            pointerId = null;
+            isDragging = false;
+          }
+          // Reset pan start when pointer is canceled
+          if (Object.keys(pointerPositions).length < 2) {
+            startMidPoint = null;
+            startLookAt = null;
+          }
+          // Clear preview when pointer is canceled
+          previewCell = null;
+        });
+
+        // Mouse wheel for zoom
+        canvas.addEventListener('wheel', (e) => {
+          e.preventDefault();
+          const delta = e.deltaY;
+          camDist += delta * 0.005;
+          camDist = Math.max(3, Math.min(20, camDist));
+        });
+
+        // Handle tap for placement/removal
+        function handleTap(clientX, clientY) {
+          const rect = canvas.getBoundingClientRect();
+          const x = clientX - rect.left;
+          const y = clientY - rect.top;
+          // Check if click hits an existing face
+          // We'll find the nearest face (last in sorted order is nearest) that contains the point
+          // Iterate faces from nearest to farthest (end to start) for correct picking
+          for (let i = lastFaces.length - 1; i >= 0; i--) {
+            const f = lastFaces[i];
+            if (pointInPolygon(x, y, f.pts)) {
+              // Remove block and record action for undo
+              const removedBlock = world.get(f.blockKey);
+              world.delete(f.blockKey);
+              if (removedBlock !== undefined) {
+                history.push({ type: 'remove', blocks: [{ key: f.blockKey, block: removedBlock }] });
+              }
+              return;
+            }
+          }
+          // Otherwise attempt to place block in front of the camera along the ray.
+          // Compute world ray origin (camera position) and direction from screen coordinates.
+          const origin = getCameraPos();
+          const dir = screenToWorldDirection(x, y);
+          // Find first empty voxel along this ray (limited steps).
+          const empty = findEmptyCellAlongRay(origin, dir, 40);
+          if (empty) {
+            // Place a group of blocks anchored to the current camera orientation
+            placeBlockGroup(empty.x, empty.y, empty.z);
+            return;
+          }
+          // Fallback: place block on the ground plane if no empty cell found along ray.
+          const grid = screenToGridPlane(x, y);
+          if (!grid) return;
+          const gx = Math.round(grid.x);
+          const gz = Math.round(grid.z);
+          // Determine the highest occupied Y at this (x,z) and place new block above it
+          const h = highestY(gx, gz) + 1 + heightOffset;
+          // Place the block group on the ground plane at the adjusted height
+          placeBlockGroup(gx, h, gz);
+        }
+
+        // Initialize default ground (optional) - start with a small plane
+        function initGround(size) {
+          const half = Math.floor(size / 2);
+          for (let x = -half; x <= half; x++) {
+            for (let z = -half; z <= half; z++) {
+              world.set(`${x},0,${z}`, { type: 'grass' });
+            }
+          }
+        }
+        initGround(5);
+
+        status.textContent = 'Ready';
+        // Initialize height display
+        updateHeightDisplay();
+        // Show camera prompt initially so the user knows to enable AR
+        showCameraPrompt();
+      })();
+    </script>
+    <!--
+      How to run:
+      - Save this HTML file and open it in any modern web browser on desktop or mobile.
+      - It will request camera permissions for an AR-style background; if declined or unavailable, a gradient background is shown.
+      - On mobile, touch and drag to rotate the view. Pinch to zoom in/out. Tap on an existing cube to remove it. Tap in empty space to place new blocks; if a free cell is found in front of you it will appear in the air, otherwise it will be placed on the ground. You can also place larger areas (2×2 or 3×3) by selecting the size on the toolbar.
+      - On desktop, use mouse drag to rotate, mouse wheel to zoom, and click to place or remove blocks as above.
+      - Use the toolbar at the bottom to select block types (Grass, Stone, Glass, Wood, Brick, Road), placement sizes (1×1, 2×2, 3×3), reset the world (which resets the ground plane), or zoom to the extent of all placed voxels.
+      - Additional buttons let you undo the most recent action, save the current world to localStorage, load a previously saved world, and toggle grid lines on the ground plane. Height controls (±) adjust the vertical offset when placing blocks on the ground plane, enabling multi‑level structures.
+      - You can pan the scene by dragging with two fingers (or two pointers), allowing you to move around the world; pinch to zoom still works.
+      - A faint preview block or group appears under your finger to show exactly where the next block(s) will be placed. Multi‑block previews respect your selected size.
+      - Blocks placed in mid‑air are anchored to your current viewing direction. They will only appear again when you point the device back toward the same real‑world direction, simulating AR persistence. Use grid lines and orientation cues to orient yourself.
+      Limitations:
+      - This demo runs entirely in 2D canvas with a simple custom renderer, so performance decreases with many blocks or very large cities. Keep the number of blocks reasonable.
+      - Without true WebXR support and spatial tracking, the game relies solely on your viewing direction for persistence; moving physically around will not anchor blocks to absolute positions.
+    -->
+  </body>
+</html>
