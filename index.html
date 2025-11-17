@@ -226,6 +226,12 @@
         <button data-type="sand">Sand</button>
         <button data-type="water">Water</button>
         <button data-type="roof">Roof</button>
+        <!-- Additional block types for richer constructions -->
+        <button data-type="window">Window</button>
+        <button data-type="door">Door</button>
+        <button data-type="stairs">Stairs</button>
+        <button data-type="torch">Torch</button>
+        <button data-type="lantern">Lantern</button>
         <!-- Control buttons -->
         <button id="reset">Reset</button>
         <button id="zoomExtent">Zoom Extent</button>
@@ -241,6 +247,13 @@
         <button id="toggleGrid">Grid</button>
         <!-- Toggle stack mode: place blocks on top of existing blocks instead of removing them -->
         <button id="stackMode">Stack</button>
+        <!-- Fill mode: select two points to fill an area with the current block type -->
+        <button id="fillMode">Fill</button>
+        <!-- Export/import: share and restore worlds via JSON -->
+        <button id="exportWorld">Export</button>
+        <button id="importWorld">Import</button>
+        <!-- Voice command toggle -->
+        <button id="voiceCmd">Voice</button>
         <!-- Size selection buttons -->
         <button data-size="1" class="size active">1×1</button>
         <button data-size="2" class="size">2×2</button>
@@ -284,6 +297,22 @@
     const stackModeBtn = document.getElementById('stackMode');
     let stackMode = false;
 
+    // Fill mode: when enabled, the user selects two corners on the ground to
+    // define a rectangular area to fill with the current block type. The
+    // selection state is stored in fillFirst. Use the Fill button to toggle this.
+    const fillModeBtn = document.getElementById('fillMode');
+    let fillMode = false;
+    let fillFirst = null;
+
+    // Export and import buttons for sharing worlds
+    const exportBtn = document.getElementById('exportWorld');
+    const importBtn = document.getElementById('importWorld');
+
+    // Voice command toggle and speech recognition state
+    const voiceBtn = document.getElementById('voiceCmd');
+    let voiceActive = false;
+    let recognition = null;
+
     // Zoom slider and orientation ball
     const zoomSlider = document.getElementById('zoomSlider');
     const orientBall = document.getElementById('orientBall');
@@ -306,6 +335,10 @@
 
         // Game state
         const world = new Map(); // key -> block object {type, yawAnchor?, pitchAnchor?}
+    // Track doors that have been opened (toggled to invisible). When a door is opened
+    // we remove it from the world map and store it here so it can be restored
+    // on a subsequent tap. Keys are of the form "x,y,z".
+    const openDoors = new Map();
         let currentType = 'grass';
         let placeSize = 1; // size of placement (1×1, 2×2, 3×3)
     // History of actions for undo functionality
@@ -358,6 +391,12 @@
         sand: { color: { r: 194, g: 178, b: 128 } }, // light yellow sand
         water: { color: { r: 64, g: 164, b: 223 }, transparent: true }, // blue semi-transparent water
         roof: { color: { r: 165, g: 42, b: 42 } }, // reddish-brown roof
+        // New block types for richer variety
+        window: { color: { r: 200, g: 230, b: 250 }, transparent: true },
+        door: { color: { r: 150, g: 75, b: 0 }, interactive: true },
+        stairs: { color: { r: 170, g: 120, b: 75 } },
+        torch: { color: { r: 255, g: 200, b: 50 } },
+        lantern: { color: { r: 255, g: 150, b: 0 } },
         };
 
         // Camera parameters
@@ -407,6 +446,8 @@
 
         resetBtn.addEventListener('click', () => {
           world.clear();
+          openDoors.clear();
+          fillFirst = null;
           // Reinitialize ground plane after clearing. Use the larger size (15)
           // so that the ground remains large enough for complex structures.
           initGround(15);
@@ -442,6 +483,156 @@
     stackModeBtn.addEventListener('click', () => {
       stackMode = !stackMode;
       stackModeBtn.classList.toggle('active', stackMode);
+    });
+
+    // Toggle Fill mode
+    fillModeBtn.addEventListener('click', () => {
+      fillMode = !fillMode;
+      fillModeBtn.classList.toggle('active', fillMode);
+      // Reset first selection when toggling
+      fillFirst = null;
+      status.textContent = fillMode ? 'Fill mode: tap first corner' : '';
+    });
+
+    // Export world data to JSON
+    exportBtn.addEventListener('click', () => {
+      const data = {
+        world: Array.from(world.entries()),
+        openDoors: Array.from(openDoors.entries()),
+      };
+      const json = JSON.stringify(data);
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(json).then(() => {
+            status.textContent = 'World exported to clipboard';
+          });
+        } else {
+          // Fallback: use prompt for user to copy manually
+          window.prompt('Copy world data:', json);
+          status.textContent = 'World export ready';
+        }
+      } catch (e) {
+        window.prompt('Copy world data:', json);
+        status.textContent = 'World export ready';
+      }
+    });
+
+    // Import world data from JSON
+    importBtn.addEventListener('click', () => {
+      const json = window.prompt('Paste world data:');
+      if (!json) return;
+      try {
+        const data = JSON.parse(json);
+        world.clear();
+        openDoors.clear();
+        fillFirst = null;
+        // Reinitialize ground
+        initGround(15);
+        if (data.world && Array.isArray(data.world)) {
+          data.world.forEach(([key, blk]) => {
+            world.set(key, blk);
+          });
+        }
+        if (data.openDoors && Array.isArray(data.openDoors)) {
+          data.openDoors.forEach(([key, blk]) => {
+            openDoors.set(key, blk);
+          });
+        }
+        // Recalculate camera distance and update slider
+        zoomToExtent();
+        if (zoomSlider) zoomSlider.value = String(camDist);
+        status.textContent = 'World imported';
+      } catch (e) {
+        alert('Invalid world data');
+      }
+    });
+
+    // Voice command button toggles speech recognition
+    voiceBtn.addEventListener('click', () => {
+      if (voiceActive) {
+        // Stop recognition if active
+        if (recognition) recognition.stop();
+        voiceActive = false;
+        voiceBtn.classList.remove('active');
+        status.textContent = 'Voice deactivated';
+        return;
+      }
+      // Initialize speech recognition if supported
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        status.textContent = 'Voice commands unsupported in this browser';
+        return;
+      }
+      recognition = new SpeechRecognition();
+      recognition.lang = 'en-US';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      voiceActive = true;
+      voiceBtn.classList.add('active');
+      status.textContent = 'Listening...';
+      recognition.onresult = (event) => {
+        if (!event.results || event.results.length === 0) return;
+        const transcript = event.results[0][0].transcript.toLowerCase();
+        status.textContent = `Heard: ${transcript}`;
+        // Recognize block type commands
+        Object.keys(blockTypes).forEach((bt) => {
+          if (transcript.includes(bt)) {
+            currentType = bt;
+            // Highlight selected block type in toolbar
+            Array.from(toolbar.querySelectorAll('button[data-type]')).forEach((b) => b.classList.remove('active'));
+            const btn = toolbar.querySelector(`button[data-type="${bt}"]`);
+            if (btn) btn.classList.add('active');
+          }
+        });
+        // Recognize stack mode toggle
+        if (transcript.includes('stack')) {
+          stackMode = !stackMode;
+          stackModeBtn.classList.toggle('active', stackMode);
+        }
+        // Recognize fill toggle
+        if (transcript.includes('fill')) {
+          fillMode = !fillMode;
+          fillModeBtn.classList.toggle('active', fillMode);
+          fillFirst = null;
+        }
+        // Recognize undo command
+        if (transcript.includes('undo')) {
+          undoBtn.click();
+        }
+        // Recognize save/load commands
+        if (transcript.includes('save')) {
+          saveBtn.click();
+        }
+        if (transcript.includes('load')) {
+          loadBtn.click();
+        }
+        // Recognize zoom commands
+        if (transcript.includes('zoom in')) {
+          zoomInBtn.click();
+        }
+        if (transcript.includes('zoom out')) {
+          zoomOutBtn.click();
+        }
+        if (transcript.includes('reset')) {
+          resetBtn.click();
+        }
+        // Stop recognition after processing
+        voiceActive = false;
+        voiceBtn.classList.remove('active');
+        recognition.stop();
+      };
+      recognition.onerror = () => {
+        voiceActive = false;
+        voiceBtn.classList.remove('active');
+        status.textContent = 'Voice error';
+      };
+      recognition.onend = () => {
+        if (voiceActive) {
+          // automatically restart
+          recognition.start();
+        }
+      };
+      recognition.start();
     });
 
     // Orientation ball interaction: allows the user to rotate the camera by dragging
@@ -975,10 +1166,59 @@
           world.forEach((_, key) => {
             const [bx, by, bz] = key.split(',').map(Number);
             if (bx === x && bz === z) {
+              const blk = world.get(key);
+              // Ignore open doors when computing highest Y; they behave like empty space
+              if (blk && blk.type === 'door' && blk.open) {
+                return;
+              }
               if (by > max) max = by;
             }
           });
           return max;
+        }
+
+        // Handle taps in Fill mode. The first tap records the start corner of a
+        // rectangular region on the ground plane. The second tap computes the end
+        // corner and fills the axis-aligned rectangle spanning these points with
+        // blocks of the current type. Fill only operates on the ground plane
+        // (y-coordinate determined by highest stack plus heightOffset) and
+        // respects the selected placement size. After the fill is performed, the
+        // selection is cleared but Fill mode remains active so the user can
+        // perform multiple fills in sequence. To exit Fill mode, tap the Fill
+        // button again.
+        function handleFillTap(screenX, screenY) {
+          // Convert screen coordinates to a point on the ground plane
+          const grid = screenToGridPlane(screenX, screenY);
+          if (!grid) return;
+          const gx = Math.round(grid.x);
+          const gz = Math.round(grid.z);
+          if (fillFirst === null) {
+            fillFirst = { x: gx, z: gz };
+            // Optionally update status to indicate selection start
+            status.textContent = `Fill: first corner set at (${gx}, ${gz})`;
+          } else {
+            // Second corner selected; fill the rectangle
+            const x1 = fillFirst.x;
+            const z1 = fillFirst.z;
+            const x2 = gx;
+            const z2 = gz;
+            const minX = Math.min(x1, x2);
+            const maxX = Math.max(x1, x2);
+            const minZ = Math.min(z1, z2);
+            const maxZ = Math.max(z1, z2);
+            for (let x = minX; x <= maxX; x++) {
+              for (let z = minZ; z <= maxZ; z++) {
+                const h = highestY(x, z) + 1 + heightOffset;
+                placeBlockGroup(x, h, z);
+              }
+            }
+            // Add a small history marker to group this fill for undo. We push an
+            // entry with type 'fill' and number of blocks equal to the area.
+            history.push({ type: 'fill', area: (maxX - minX + 1) * (maxZ - minZ + 1), bounds: { x1: minX, z1: minZ, x2: maxX, z2: maxZ } });
+            // Clear first corner for next selection
+            fillFirst = null;
+            status.textContent = 'Fill: region created';
+          }
         }
 
         // Place blocks of the currently selected type at a base location, filling a square of
@@ -1120,12 +1360,50 @@
                 tMaxZ += tDeltaZ;
               }
             }
-            // After moving, check current cell for emptiness
-            if (!world.has(`${x},${y},${z}`) && y >= 0) {
-              return { x, y, z };
+            // After moving, check current cell for emptiness. Treat open doors as empty.
+            if (y >= 0) {
+              const keyStr = `${x},${y},${z}`;
+              const existing = world.get(keyStr);
+              const empty = !existing || (existing.type === 'door' && existing.open);
+              if (empty) {
+                return { x, y, z };
+              }
             }
           }
           return null;
+        }
+
+        // Apply gravity to all blocks. Blocks above empty space will fall down until
+        // they rest on another block or the ground (y=0). Open doors are not
+        // considered blocks and therefore do not impede blocks from falling.
+        function applyGravity() {
+          // Group blocks by their x,z columns
+          const columns = new Map();
+          world.forEach((blk, key) => {
+            const [bx, by, bz] = key.split(',').map(Number);
+            // Skip if this key corresponds to an open door stored in openDoors
+            if (openDoors.has(key)) {
+              return;
+            }
+            const colKey = `${bx},${bz}`;
+            if (!columns.has(colKey)) columns.set(colKey, []);
+            columns.get(colKey).push({ y: by, key, block: blk });
+          });
+          // For each column, drop blocks down
+          columns.forEach((cells, colKey) => {
+            const [x, z] = colKey.split(',').map(Number);
+            // Sort cells by ascending Y so we process from bottom to top
+            cells.sort((a, b) => a.y - b.y);
+            let nextY = 0;
+            cells.forEach(({ y, key, block }) => {
+              // If the block is below nextY, skip; else drop to nextY
+              if (y !== nextY) {
+                world.delete(key);
+                world.set(`${x},${nextY},${z}`, block);
+              }
+              nextY++;
+            });
+          });
         }
 
         // Compute preview cell for ghost placement given screen coordinates
@@ -1342,14 +1620,21 @@
           const rect = canvas.getBoundingClientRect();
           const x = clientX - rect.left;
           const y = clientY - rect.top;
+          // If Fill mode is active, interpret this tap as part of a fill selection.
+          if (fillMode) {
+            handleFillTap(x, y);
+            return;
+          }
           // Check if click hits an existing face
           // We'll find the nearest face (last in sorted order is nearest) that contains the point
           // Iterate faces from nearest to farthest (end to start) for correct picking
           for (let i = lastFaces.length - 1; i >= 0; i--) {
             const f = lastFaces[i];
             if (pointInPolygon(x, y, f.pts)) {
-              // When stack mode is active, place a block adjacent to the clicked face instead of removing
+              // Determine the block we clicked on
+              const block = world.get(f.blockKey);
               if (stackMode) {
+                // In stack mode, place a new block adjacent to the clicked face. Treat open doors as empty.
                 const [bx, by, bz] = f.blockKey.split(',').map(Number);
                 const nx = f.normal.x;
                 const ny = f.normal.y;
@@ -1357,16 +1642,39 @@
                 const targetX = bx + nx;
                 const targetY = by + ny;
                 const targetZ = bz + nz;
-                // Only place if the position is within world bounds and empty
-                if (targetY >= 0 && !world.has(`${targetX},${targetY},${targetZ}`)) {
-                  placeBlockGroup(targetX, targetY, targetZ);
+                if (targetY >= 0) {
+                  const existing = world.get(`${targetX},${targetY},${targetZ}`);
+                  const isEmpty = !existing || (existing.type === 'door' && existing.open);
+                  if (isEmpty) {
+                    placeBlockGroup(targetX, targetY, targetZ);
+                  }
                 }
               } else {
-                // Remove block and record action for undo
-                const removedBlock = world.get(f.blockKey);
-                world.delete(f.blockKey);
-                if (removedBlock !== undefined) {
-                  history.push({ type: 'remove', blocks: [{ key: f.blockKey, block: removedBlock }] });
+                // If the block is a door, toggle its open state instead of removing it
+                if (block && block.type === 'door') {
+                  // Door interaction: if the door is currently open (stored in openDoors), close it
+                  if (openDoors.has(f.blockKey)) {
+                    const originalBlock = openDoors.get(f.blockKey);
+                    world.set(f.blockKey, originalBlock);
+                    openDoors.delete(f.blockKey);
+                    history.push({ type: 'doorClose', key: f.blockKey });
+                  } else {
+                    // Door is closed, open it: remove from world and store for later
+                    openDoors.set(f.blockKey, block);
+                    world.delete(f.blockKey);
+                    history.push({ type: 'doorOpen', key: f.blockKey, block });
+                    // Opening a door may cause blocks above to fall
+                    applyGravity();
+                  }
+                } else {
+                  // Remove block and record action for undo
+                  const removedBlock = block;
+                  world.delete(f.blockKey);
+                  if (removedBlock !== undefined) {
+                    history.push({ type: 'remove', blocks: [{ key: f.blockKey, block: removedBlock }] });
+                  }
+                  // After removal, apply gravity to allow blocks above to settle
+                  applyGravity();
                 }
               }
               return;
