@@ -239,6 +239,8 @@
         <button id="save">Save</button>
         <button id="load">Load</button>
         <button id="toggleGrid">Grid</button>
+        <!-- Toggle stack mode: place blocks on top of existing blocks instead of removing them -->
+        <button id="stackMode">Stack</button>
         <!-- Size selection buttons -->
         <button data-size="1" class="size active">1×1</button>
         <button data-size="2" class="size">2×2</button>
@@ -278,6 +280,9 @@
     // Zoom in/out buttons
     const zoomInBtn = document.getElementById('zoomIn');
     const zoomOutBtn = document.getElementById('zoomOut');
+    // Stack mode toggle
+    const stackModeBtn = document.getElementById('stackMode');
+    let stackMode = false;
 
     // Zoom slider and orientation ball
     const zoomSlider = document.getElementById('zoomSlider');
@@ -429,6 +434,13 @@
       if (!isNaN(val)) {
         camDist = Math.max(3, Math.min(50, val));
       }
+    });
+
+    // Toggle stack mode: when enabled, tapping on an existing block will place a new block on
+    // the face you tapped instead of removing it. The button highlights when active.
+    stackModeBtn.addEventListener('click', () => {
+      stackMode = !stackMode;
+      stackModeBtn.classList.toggle('active', stackMode);
     });
 
     // Orientation ball interaction: allows the user to rotate the camera by dragging
@@ -1335,11 +1347,26 @@
           for (let i = lastFaces.length - 1; i >= 0; i--) {
             const f = lastFaces[i];
             if (pointInPolygon(x, y, f.pts)) {
-              // Remove block and record action for undo
-              const removedBlock = world.get(f.blockKey);
-              world.delete(f.blockKey);
-              if (removedBlock !== undefined) {
-                history.push({ type: 'remove', blocks: [{ key: f.blockKey, block: removedBlock }] });
+              // When stack mode is active, place a block adjacent to the clicked face instead of removing
+              if (stackMode) {
+                const [bx, by, bz] = f.blockKey.split(',').map(Number);
+                const nx = f.normal.x;
+                const ny = f.normal.y;
+                const nz = f.normal.z;
+                const targetX = bx + nx;
+                const targetY = by + ny;
+                const targetZ = bz + nz;
+                // Only place if the position is within world bounds and empty
+                if (targetY >= 0 && !world.has(`${targetX},${targetY},${targetZ}`)) {
+                  placeBlockGroup(targetX, targetY, targetZ);
+                }
+              } else {
+                // Remove block and record action for undo
+                const removedBlock = world.get(f.blockKey);
+                world.delete(f.blockKey);
+                if (removedBlock !== undefined) {
+                  history.push({ type: 'remove', blocks: [{ key: f.blockKey, block: removedBlock }] });
+                }
               }
               return;
             }
