@@ -407,8 +407,9 @@
 
         resetBtn.addEventListener('click', () => {
           world.clear();
-          // Reinitialize ground plane after clearing
-          initGround(5);
+          // Reinitialize ground plane after clearing. Use the larger size (15)
+          // so that the ground remains large enough for complex structures.
+          initGround(15);
       // Clear history on reset
       history = [];
         });
@@ -1402,7 +1403,86 @@
             }
           }
         }
-        initGround(5);
+
+        // Create an initial castle structure at the center of the world.
+        // The castle comprises an outer wall, four corner towers and a walkway
+        // around the top. Walls are built from stone blocks, towers from
+        // brick blocks with roof blocks on top, and a simple gate opening on the
+        // front side (negative z direction). Adjust these ranges to change
+        // the size or appearance of the castle. The structure is placed at
+        // ground level (y=1+) and does not include a floor, allowing you to
+        // customize the interior.
+        function createCastle() {
+          // Outer wall dimensions (from -4 to 4 along both x and z)
+          const min = -4;
+          const max = 4;
+          // Build outer walls at y=1 and y=2 using stone blocks
+          for (let x = min; x <= max; x++) {
+            for (let z = min; z <= max; z++) {
+              // Determine if this position is on the perimeter
+              const onPerimeter = (x === min || x === max || z === min || z === max);
+              if (onPerimeter) {
+                // Leave a gate opening on the front side (z == min) between x=-1 and x=1
+                if (z === min && x >= -1 && x <= 1) {
+                  continue;
+                }
+                // Build the wall two blocks high
+                for (let y = 1; y <= 2; y++) {
+                  world.set(`${x},${y},${z}`, { type: 'stone' });
+                }
+              }
+            }
+          }
+          // Define the coordinates for four corner towers. Each tower covers
+          // a 2×2 footprint and rises four blocks high with a roof on top.
+          const towerRanges = [
+            { xs: [-4, -3], zs: [-4, -3] },
+            { xs: [-4, -3], zs: [3, 4] },
+            { xs: [3, 4], zs: [-4, -3] },
+            { xs: [3, 4], zs: [3, 4] },
+          ];
+          towerRanges.forEach(({ xs, zs }) => {
+            for (let x = xs[0]; x <= xs[1]; x++) {
+              for (let z = zs[0]; z <= zs[1]; z++) {
+                // Build tower body up to y=4 with brick
+                for (let y = 1; y <= 4; y++) {
+                  world.set(`${x},${y},${z}`, { type: 'brick' });
+                }
+                // Add a roof block on top at y=5
+                world.set(`${x},5,${z}`, { type: 'roof' });
+              }
+            }
+          });
+          // Construct a walkway at y=3 along the inner perimeter of the wall using stone
+          for (let x = min + 1; x <= max - 1; x++) {
+            // Front and back walls
+            world.set(`${x},3,${min}`, { type: 'stone' });
+            world.set(`${x},3,${max}`, { type: 'stone' });
+          }
+          for (let z = min + 1; z <= max - 1; z++) {
+            // Left and right walls
+            world.set(`${min},3,${z}`, { type: 'stone' });
+            world.set(`${max},3,${z}`, { type: 'stone' });
+          }
+        }
+        // Initialize a larger ground plane so we have room for a starting castle. Use
+        // a larger size (15) instead of the default 5. This creates a flat grassy
+        // surface from -7 to 7 in both x and z directions.
+        initGround(15);
+
+        // Build an initial castle at the center of the world. The castle uses
+        // stone walls, brick towers, and a roof for the tower tops. See
+        // createCastle() definition below. After constructing the castle,
+        // automatically zoom the camera to fit all of its blocks in view so it
+        // appears centered on load.
+        createCastle();
+        zoomToExtent();
+        // Sync the zoom slider with the computed camera distance so the slider
+        // reflects the current zoom level. Without this, the slider retains its
+        // default value even after zoomToExtent() adjusts camDist.
+        if (zoomSlider) {
+          zoomSlider.value = String(camDist);
+        }
 
         status.textContent = 'Ready';
         // Initialize height display
