@@ -725,31 +725,58 @@
     // between the minimum and maximum distances. Prevents interference with
     // the default canvas gestures while interacting with the zoom ball.
     let isZoomDragging = false;
-    function updateZoomFromEvent(e) {
+    // Update camera orientation and zoom based on pointer event on the zoom ball.
+    // This function computes two things: (1) the yaw/pitch orientation using the
+    // same spherical mapping as the orientation ball, and (2) the camera
+    // distance by mapping the horizontal position to a ratio between the
+    // minimum and maximum zoom values. This allows the zoom ball to rotate
+    // blocks and adjust zoom simultaneously.
+    function updateZoomBallFromEvent(e) {
       e.preventDefault();
       const rect = zoomBall.getBoundingClientRect();
       const cx = rect.width / 2;
+      const cy = rect.height / 2;
       const radius = Math.min(rect.width, rect.height) / 2 - 4;
-      // Compute horizontal offset from center
-      const localX = e.clientX - rect.left - cx;
-      // Map horizontal offset to ratio in [0,1]
-      let ratio = (localX / radius + 1) / 2;
+      // Local coordinates relative to the center of the ball
+      let localX = e.clientX - rect.left - cx;
+      let localY = e.clientY - rect.top - cy;
+      // Normalize to unit sphere coordinates
+      let dx = localX / radius;
+      let dy = localY / radius;
+      // Project onto unit circle if outside
+      const dist2 = dx * dx + dy * dy;
+      if (dist2 > 1) {
+        const dist = Math.sqrt(dist2);
+        dx /= dist;
+        dy /= dist;
+      }
+      // Update orientation using spherical mapping (similar to orientation ball)
+      const dirY = -dy;
+      const dirX = dx;
+      const temp = 1 - dirX * dirX - dirY * dirY;
+      const dirZ = temp > 0 ? Math.sqrt(temp) : 0;
+      yaw = Math.atan2(dirX, dirZ);
+      // Clamp pitch to avoid flipping
+      const newPitch = Math.asin(dirY);
+      const limit = Math.PI / 2 - 0.01;
+      pitch = Math.max(-limit, Math.min(limit, newPitch));
+      // Map horizontal offset to zoom ratio [0,1]
+      let ratio = (dx + 1) / 2; // dx is now clamped to [-1,1]
       ratio = Math.max(0, Math.min(1, ratio));
       const minDist = parseFloat(zoomSlider.min);
       const maxDist = parseFloat(zoomSlider.max);
       camDist = minDist + ratio * (maxDist - minDist);
-      // Keep slider in sync
       zoomSlider.value = String(camDist);
     }
     zoomBall.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       isZoomDragging = true;
-      updateZoomFromEvent(e);
+      updateZoomBallFromEvent(e);
     });
     zoomBall.addEventListener('pointermove', (e) => {
       if (isZoomDragging) {
         e.stopPropagation();
-        updateZoomFromEvent(e);
+        updateZoomBallFromEvent(e);
       }
     });
     zoomBall.addEventListener('pointerup', (e) => {
