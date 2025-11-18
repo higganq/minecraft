@@ -113,6 +113,21 @@
         z-index: 12;
       }
 
+      /* Zoom control ball indicator.  This ball allows users to adjust the camera
+         distance by dragging the red dot horizontally.  The dot represents
+         the current zoom level between the minimum and maximum distances.
+         Placed just below the orientation ball to align controls visually. */
+      #zoomBall {
+        position: absolute;
+        top: 80px; /* place below the orientation ball */
+        right: 10px;
+        width: 60px;
+        height: 60px;
+        pointer-events: auto;
+        cursor: pointer;
+        z-index: 12;
+      }
+
       /* Height display styling */
       #heightDisplay {
         color: #fff;
@@ -207,7 +222,9 @@
       <canvas id="gameCanvas"></canvas>
       <div id="status">Initializing...</div>
       <!-- Orientation ball: displays current yaw/pitch orientation -->
-      <canvas id="orientBall" width="80" height="80"></canvas>
+      <canvas id="orientBall" width="60" height="60"></canvas>
+      <!-- Zoom ball: controls camera distance via dragging. Shows current zoom level. -->
+      <canvas id="zoomBall" width="60" height="60"></canvas>
       <!-- Prompt asking the user to enable camera. Initially hidden until needed. -->
       <div id="cameraPrompt">
         <p>Please enable your camera to overlay blocks in AR. Depending on your browser, camera access may require a secure (https) context or explicit permission. If your camera prompt does not appear, try hosting this file on a local web server or enabling permissions in your browser settings.</p>
@@ -317,6 +334,11 @@
     const zoomSlider = document.getElementById('zoomSlider');
     const orientBall = document.getElementById('orientBall');
     const orientCtx = orientBall.getContext('2d');
+    // Zoom control ball for adjusting camera distance.  This is a separate
+    // canvas element positioned below the orientation ball.  It shares a
+    // similar look but the red dot moves horizontally to represent zoom.
+    const zoomBall = document.getElementById('zoomBall');
+    const zoomCtx = zoomBall.getContext('2d');
 
     // State for orientation ball dragging. When true, dragging on the orientation
     // ball updates the yaw and pitch directly, allowing the user to quickly
@@ -697,6 +719,52 @@
       }
     });
 
+    // Zoom ball interaction: allows the user to adjust the camera distance by
+    // dragging horizontally across the zoom ball. The horizontal position of
+    // the pointer relative to the center of the ball maps to a zoom ratio
+    // between the minimum and maximum distances. Prevents interference with
+    // the default canvas gestures while interacting with the zoom ball.
+    let isZoomDragging = false;
+    function updateZoomFromEvent(e) {
+      e.preventDefault();
+      const rect = zoomBall.getBoundingClientRect();
+      const cx = rect.width / 2;
+      const radius = Math.min(rect.width, rect.height) / 2 - 4;
+      // Compute horizontal offset from center
+      const localX = e.clientX - rect.left - cx;
+      // Map horizontal offset to ratio in [0,1]
+      let ratio = (localX / radius + 1) / 2;
+      ratio = Math.max(0, Math.min(1, ratio));
+      const minDist = parseFloat(zoomSlider.min);
+      const maxDist = parseFloat(zoomSlider.max);
+      camDist = minDist + ratio * (maxDist - minDist);
+      // Keep slider in sync
+      zoomSlider.value = String(camDist);
+    }
+    zoomBall.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      isZoomDragging = true;
+      updateZoomFromEvent(e);
+    });
+    zoomBall.addEventListener('pointermove', (e) => {
+      if (isZoomDragging) {
+        e.stopPropagation();
+        updateZoomFromEvent(e);
+      }
+    });
+    zoomBall.addEventListener('pointerup', (e) => {
+      if (isZoomDragging) {
+        isZoomDragging = false;
+        e.stopPropagation();
+      }
+    });
+    zoomBall.addEventListener('pointerleave', (e) => {
+      if (isZoomDragging) {
+        isZoomDragging = false;
+        e.stopPropagation();
+      }
+    });
+
     // Undo last action
     undoBtn.addEventListener('click', () => {
       undoLastAction();
@@ -783,6 +851,57 @@
       ctx2.arc(px, py, 4, 0, Math.PI * 2);
       ctx2.fill();
     }
+
+    // Draw the zoom ball indicator.  This visualizes the current camera distance
+    // as a red dot that slides horizontally across a shaded sphere.  The dot
+    // position maps the camera distance to the range [0,1], where 0
+    // corresponds to the minimum zoom (closest view) and 1 corresponds to
+    // the maximum zoom (farthest view).  Dragging on the ball updates
+    // camDist accordingly.
+    function drawZoomBall() {
+      const ctx2 = zoomCtx;
+      const w = zoomBall.width;
+      const h = zoomBall.height;
+      const cx = w / 2;
+      const cy = h / 2;
+      const radius = Math.min(w, h) / 2 - 4;
+      // Clear previous drawing
+      ctx2.clearRect(0, 0, w, h);
+      // Draw shaded sphere
+      const grad = ctx2.createRadialGradient(cx - radius / 3, cy - radius / 3, radius * 0.2, cx, cy, radius);
+      grad.addColorStop(0, '#dddddd');
+      grad.addColorStop(1, '#666666');
+      ctx2.fillStyle = grad;
+      ctx2.beginPath();
+      ctx2.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx2.fill();
+      // Draw cross lines to indicate axes
+      ctx2.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx2.lineWidth = 1;
+      ctx2.beginPath();
+      // horizontal line through center
+      ctx2.moveTo(cx - radius, cy);
+      ctx2.lineTo(cx + radius, cy);
+      // vertical line through center
+      ctx2.moveTo(cx, cy - radius);
+      ctx2.lineTo(cx, cy + radius);
+      ctx2.stroke();
+      // Compute ratio of current camera distance between min and max
+      const minDist = parseFloat(zoomSlider.min);
+      const maxDist = parseFloat(zoomSlider.max);
+      const ratio = (camDist - minDist) / (maxDist - minDist);
+      // Clamp ratio between 0 and 1
+      const clamped = Math.max(0, Math.min(1, ratio));
+      // Map to horizontal displacement across the ball: range [-radius, +radius]
+      const pxOffset = clamped * 2 * radius - radius;
+      const pxBall = cx + pxOffset;
+      const pyBall = cy;
+      // Draw zoom indicator dot
+      ctx2.fillStyle = 'rgba(255,80,80,0.9)';
+      ctx2.beginPath();
+      ctx2.arc(pxBall, pyBall, 4, 0, Math.PI * 2);
+      ctx2.fill();
+    }
     heightUpBtn.addEventListener('click', () => {
       heightOffset = Math.min(heightOffset + 1, 10);
       updateHeightDisplay();
@@ -826,10 +945,10 @@
               // All camera requests failed or permission denied
               fallbackOverlay.style.display = 'block';
               console.warn('Camera unavailable:', err2);
-              // Inform the user that the camera is unavailable and show the prompt
-              cameraPrompt.querySelector('p').textContent =
-                'Camera unavailable or permission denied. The game will use a fallback background. Please ensure your device has a camera and that you have granted permission. Some browsers block camera access for local files; hosting this file via https or a local server can help.';
-              showCameraPrompt();
+              // Notify the user via the status bar instead of blocking with a prompt
+              status.textContent = 'Camera unavailable or permission denied. Using fallback background.';
+              // Hide the camera prompt so the game area remains interactive
+              hideCameraPrompt();
             }
           }
         }
@@ -1143,6 +1262,8 @@
           }
           // Render the orientation ball for visual feedback of yaw and pitch
           drawOrientationBall();
+          // Render the zoom ball to visualize current zoom level and allow drag control
+          drawZoomBall();
         }
         requestAnimationFrame(render);
 
