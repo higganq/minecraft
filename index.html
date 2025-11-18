@@ -376,13 +376,17 @@
     // Store midpoint and lookAt for panning (two-finger drag)
     let startMidPoint = null;
     let startLookAt = null;
-        // Orientation anchor thresholds (radians). Blocks with anchors will only render if current camera
-        // orientation is within these thresholds of their anchor orientation. This simulates spatial awareness.
+        // Base orientation anchor thresholds (radians). Blocks with anchors will only render
+        // if the current camera orientation is within these thresholds of the orientation
+        // when they were placed. These base values are used to derive dynamic thresholds
+        // based on the camera's zoom level (camDist). See the render() function for
+        // details on how these values are adjusted.
         const yawAnchorThreshold = Math.PI / 9;   // ~20 degrees
         const pitchAnchorThreshold = Math.PI / 6; // ~30 degrees
-        // Threshold (in world units) for translation anchors. Blocks will only render
+        // Base translation threshold (in world units). Blocks will only render
         // if the current camera position is within this distance of the position
-        // where the block was created. This helps simulate spatial anchoring.
+        // where the block was created. Dynamic thresholds based on camDist will
+        // expand this range when zoomed out.
         const posAnchorThreshold = 4;
 
         // Flag to track whether the camera has been initialized. The camera API often
@@ -722,61 +726,39 @@
     // Zoom ball interaction: allows the user to adjust the camera distance by
     // dragging horizontally across the zoom ball. The horizontal position of
     // the pointer relative to the center of the ball maps to a zoom ratio
-    // between the minimum and maximum distances. Prevents interference with
-    // the default canvas gestures while interacting with the zoom ball.
+    // between the minimum and maximum distances. This does not affect
+    // camera orientation—orientation is controlled solely by the orientation ball.
     let isZoomDragging = false;
-    // Update camera orientation and zoom based on pointer event on the zoom ball.
-    // This function computes two things: (1) the yaw/pitch orientation using the
-    // same spherical mapping as the orientation ball, and (2) the camera
-    // distance by mapping the horizontal position to a ratio between the
-    // minimum and maximum zoom values. This allows the zoom ball to rotate
-    // blocks and adjust zoom simultaneously.
-    function updateZoomBallFromEvent(e) {
+    function updateZoomFromEvent(e) {
       e.preventDefault();
       const rect = zoomBall.getBoundingClientRect();
       const cx = rect.width / 2;
-      const cy = rect.height / 2;
       const radius = Math.min(rect.width, rect.height) / 2 - 4;
-      // Local coordinates relative to the center of the ball
-      let localX = e.clientX - rect.left - cx;
-      let localY = e.clientY - rect.top - cy;
-      // Normalize to unit sphere coordinates
+      // Compute horizontal offset from center
+      const localX = e.clientX - rect.left - cx;
+      // Normalize horizontal offset to [-1,1] range
       let dx = localX / radius;
-      let dy = localY / radius;
-      // Project onto unit circle if outside
-      const dist2 = dx * dx + dy * dy;
-      if (dist2 > 1) {
-        const dist = Math.sqrt(dist2);
-        dx /= dist;
-        dy /= dist;
-      }
-      // Update orientation using spherical mapping (similar to orientation ball)
-      const dirY = -dy;
-      const dirX = dx;
-      const temp = 1 - dirX * dirX - dirY * dirY;
-      const dirZ = temp > 0 ? Math.sqrt(temp) : 0;
-      yaw = Math.atan2(dirX, dirZ);
-      // Clamp pitch to avoid flipping
-      const newPitch = Math.asin(dirY);
-      const limit = Math.PI / 2 - 0.01;
-      pitch = Math.max(-limit, Math.min(limit, newPitch));
-      // Map horizontal offset to zoom ratio [0,1]
-      let ratio = (dx + 1) / 2; // dx is now clamped to [-1,1]
+      if (dx < -1) dx = -1;
+      if (dx > 1) dx = 1;
+      // Map normalized horizontal offset to ratio [0,1]
+      let ratio = (dx + 1) / 2;
+      // Clamp ratio
       ratio = Math.max(0, Math.min(1, ratio));
       const minDist = parseFloat(zoomSlider.min);
       const maxDist = parseFloat(zoomSlider.max);
       camDist = minDist + ratio * (maxDist - minDist);
+      // Sync slider with camDist
       zoomSlider.value = String(camDist);
     }
     zoomBall.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       isZoomDragging = true;
-      updateZoomBallFromEvent(e);
+      updateZoomFromEvent(e);
     });
     zoomBall.addEventListener('pointermove', (e) => {
       if (isZoomDragging) {
         e.stopPropagation();
-        updateZoomBallFromEvent(e);
+        updateZoomFromEvent(e);
       }
     });
     zoomBall.addEventListener('pointerup', (e) => {
@@ -1046,6 +1028,27 @@
           ctx.clearRect(0, 0, width, height);
           const camPos = getCameraPos();
 
+          // Dynamically adjust anchor thresholds based on the current camera distance.  The farther
+          // the camera is from the scene (larger camDist), the more lenient the thresholds become.
+          // This allows the user to reveal anchored blocks by zooming out.  When zoomed in,
+          // thresholds are tight so that only blocks anchored close to the current view and position
+          // are shown.
+          let dynamicYawAnchor = yawAnchorThreshold;
+          let dynamicPitchAnchor = pitchAnchorThreshold;
+          let dynamicPosAnchor = posAnchorThreshold;
+          if (zoomSlider) {
+            const minDist = parseFloat(zoomSlider.min);
+            const maxDist = parseFloat(zoomSlider.max);
+            const ratio = (camDist - minDist) / (maxDist - minDist);
+            const clampedRatio = Math.max(0, Math.min(1, ratio));
+            // Increase thresholds linearly with zoom ratio.  At maximum zoom, thresholds
+            // double (orientation) and triple (position) from their base values.  At minimum
+            // zoom, thresholds remain at the base values.
+            dynamicYawAnchor = yawAnchorThreshold * (1 + clampedRatio);
+            dynamicPitchAnchor = pitchAnchorThreshold * (1 + clampedRatio);
+            dynamicPosAnchor = posAnchorThreshold * (1 + clampedRatio * 2);
+          }
+
           // Precompute light direction in camera space
           const lightDirWorld = { x: -0.5, y: 1, z: -0.5 };
           // Normalize light direction
@@ -1082,9 +1085,26 @@
             } else {
               typeName = block;
             }
-            // Always render blocks regardless of the camera's current orientation or position. This
-            // change allows blocks to remain anchored in space once placed so that rotating or
-            // panning the camera will update their apparent orientation rather than hide them.
+            // If the block has orientation and position anchors, only render it when the
+            // current camera orientation and position are within the defined thresholds.
+            // This simulates spatial anchoring: blocks remain fixed in world coordinates
+            // but are only visible when you return to the same direction and location.
+            if (anchorYaw !== undefined) {
+              const yawDiff = angleDifference(yaw, anchorYaw);
+              const pitchDiff = angleDifference(pitch, anchorPitch);
+              const posDiff = Math.hypot(camPos.x - anchorX, camPos.z - anchorZ);
+              // Use dynamic thresholds computed at the start of the render loop.  When zoomed
+              // out, these thresholds increase, allowing more anchored blocks to remain
+              // visible.  When zoomed in, the thresholds shrink back to their base values.
+              if (
+                yawDiff > dynamicYawAnchor ||
+                pitchDiff > dynamicPitchAnchor ||
+                posDiff > dynamicPosAnchor
+              ) {
+                // Skip rendering this block if outside thresholds
+                return;
+              }
+            }
             const [bx, by, bz] = key.split(',').map(Number);
             // Define cube vertices relative to block center at (bx,by,bz)
             const verts = [
@@ -1378,15 +1398,25 @@
           // Blocks no longer store translation or orientation anchors. This retrieval is
           // preserved for potential future use but has no effect on placement.
           const camPosForAnchor = getCameraPos();
+          // Record anchor position from the current camera position for spatial anchoring
+          const anchorPos = getCameraPos();
           for (let dx = 0; dx < placeSize; dx++) {
             for (let dz = 0; dz < placeSize; dz++) {
               const key = `${baseX + dx},${baseY},${baseZ + dz}`;
-               if (!world.has(key)) {
-                 // Store only the block type. All blocks are always visible and anchored by
-                 // their world coordinates; no orientation or translation anchors are recorded.
-                 world.set(key, { type: currentType });
-                 placedKeys.push(key);
-               }
+              if (!world.has(key)) {
+                // Store the block type along with orientation and position anchors.  These anchors
+                // ensure the block only renders when the user returns to a similar orientation
+                // (yaw/pitch) and position (x/z) as when it was placed, simulating spatial
+                // anchoring in augmented reality.
+                world.set(key, {
+                  type: currentType,
+                  yawAnchor: yaw,
+                  pitchAnchor: pitch,
+                  posAnchorX: anchorPos.x,
+                  posAnchorZ: anchorPos.z
+                });
+                placedKeys.push(key);
+              }
             }
           }
           // Record placement action if any blocks were added
