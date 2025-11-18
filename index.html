@@ -698,12 +698,10 @@
       // Compute dirZ on the unit sphere
       const temp = 1 - dirX * dirX - dirY * dirY;
       const dirZ = temp > 0 ? Math.sqrt(temp) : 0;
-      // Update yaw and pitch
+      // Update yaw only.  The zoom ball is responsible for adjusting pitch (tilt).
       yaw = Math.atan2(dirX, dirZ);
-      // Clamp pitch to avoid flipping (±89°)
-      const newPitch = Math.asin(dirY);
-      const limit = Math.PI / 2 - 0.01;
-      pitch = Math.max(-limit, Math.min(limit, newPitch));
+      // Do not update pitch here; it will be modified by updateZoomFromEvent when the user
+      // drags on the zoom ball.  This separation keeps the two balls independent.
     }
     orientBall.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
@@ -739,20 +737,33 @@
       e.preventDefault();
       const rect = zoomBall.getBoundingClientRect();
       const cx = rect.width / 2;
+      const cy = rect.height / 2;
       const radius = Math.min(rect.width, rect.height) / 2 - 4;
-      // Compute horizontal offset from center
+      // Compute local offsets from center
       const localX = e.clientX - rect.left - cx;
-      // Normalize horizontal offset to [-1,1] range
+      const localY = e.clientY - rect.top - cy;
+      // Normalize horizontal and vertical offsets
       let dx = localX / radius;
-      if (dx < -1) dx = -1;
-      if (dx > 1) dx = 1;
-      // Map normalized horizontal offset to ratio [0,1]
+      let dy = localY / radius;
+      // If the pointer is outside the sphere, project onto the surface to maintain consistent mapping
+      const dist2 = dx * dx + dy * dy;
+      if (dist2 > 1) {
+        const dist = Math.sqrt(dist2);
+        dx /= dist;
+        dy /= dist;
+      }
+      // Horizontal component controls zoom: map dx from [-1,1] to ratio [0,1]
       let ratio = (dx + 1) / 2;
-      // Clamp ratio
       ratio = Math.max(0, Math.min(1, ratio));
       const minDist = parseFloat(zoomSlider.min);
       const maxDist = parseFloat(zoomSlider.max);
       camDist = minDist + ratio * (maxDist - minDist);
+      // Vertical component controls pitch (tilt): invert dy for intuitive up/down mapping and derive pitch from a sphere.
+      const dirY = -dy;
+      const newPitch = Math.asin(dirY);
+      // Clamp pitch to avoid flipping (±89°)
+      const limit = Math.PI / 2 - 0.01;
+      pitch = Math.max(-limit, Math.min(limit, newPitch));
       // Sync slider with camDist
       zoomSlider.value = String(camDist);
     }
