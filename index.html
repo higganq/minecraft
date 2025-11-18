@@ -128,6 +128,18 @@
         z-index: 12;
       }
 
+      /* Tilt slider styling.  Positioned below the zoom ball and sized to align with
+         the control balls.  The slider allows users to adjust camera pitch
+         (up/down tilt) independently from the zoom ball. */
+      #tiltSlider {
+        position: absolute;
+        top: 150px; /* place below the zoom ball */
+        right: 10px;
+        width: 60px;
+        pointer-events: auto;
+        z-index: 12;
+      }
+
       /* Height display styling */
       #heightDisplay {
         color: #fff;
@@ -225,6 +237,8 @@
       <canvas id="orientBall" width="60" height="60"></canvas>
       <!-- Zoom ball: controls camera distance via dragging. Shows current zoom level. -->
       <canvas id="zoomBall" width="60" height="60"></canvas>
+      <!-- Tilt slider: controls the camera pitch (tilt) independently of the zoom ball. -->
+      <input type="range" id="tiltSlider" min="-80" max="80" value="-30" step="1" />
       <!-- Prompt asking the user to enable camera. Initially hidden until needed. -->
       <div id="cameraPrompt">
         <p>Please enable your camera to overlay blocks in AR. Depending on your browser, camera access may require a secure (https) context or explicit permission. If your camera prompt does not appear, try hosting this file on a local web server or enabling permissions in your browser settings.</p>
@@ -342,6 +356,22 @@
     // similar look but the red dot moves horizontally to represent zoom.
     const zoomBall = document.getElementById('zoomBall');
     const zoomCtx = zoomBall.getContext('2d');
+    const tiltSlider = document.getElementById('tiltSlider');
+
+    // When the tilt slider value changes, update the camera's pitch (vertical rotation).
+    // The slider's range is specified in degrees; convert to radians for internal use.
+    if (tiltSlider) {
+      tiltSlider.addEventListener('input', () => {
+        const deg = parseFloat(tiltSlider.value);
+        if (!isNaN(deg)) {
+          // Convert degrees to radians
+          const rad = deg * Math.PI / 180;
+          // Clamp pitch to just under ±90° to avoid flipping
+          const limit = Math.PI / 2 - 0.01;
+          pitch = Math.max(-limit, Math.min(limit, rad));
+        }
+      });
+    }
 
     // State for orientation ball dragging. When true, dragging on the orientation
     // ball updates the yaw and pitch directly, allowing the user to quickly
@@ -737,33 +767,20 @@
       e.preventDefault();
       const rect = zoomBall.getBoundingClientRect();
       const cx = rect.width / 2;
-      const cy = rect.height / 2;
+      // Determine radius (subtract margin) for mapping
       const radius = Math.min(rect.width, rect.height) / 2 - 4;
-      // Compute local offsets from center
+      // Compute horizontal offset from center
       const localX = e.clientX - rect.left - cx;
-      const localY = e.clientY - rect.top - cy;
-      // Normalize horizontal and vertical offsets
+      // Normalize horizontal offset to [-1,1]
       let dx = localX / radius;
-      let dy = localY / radius;
-      // If the pointer is outside the sphere, project onto the surface to maintain consistent mapping
-      const dist2 = dx * dx + dy * dy;
-      if (dist2 > 1) {
-        const dist = Math.sqrt(dist2);
-        dx /= dist;
-        dy /= dist;
-      }
-      // Horizontal component controls zoom: map dx from [-1,1] to ratio [0,1]
+      if (dx < -1) dx = -1;
+      if (dx > 1) dx = 1;
+      // Map normalized value to [0,1] ratio
       let ratio = (dx + 1) / 2;
       ratio = Math.max(0, Math.min(1, ratio));
       const minDist = parseFloat(zoomSlider.min);
       const maxDist = parseFloat(zoomSlider.max);
       camDist = minDist + ratio * (maxDist - minDist);
-      // Vertical component controls pitch (tilt): invert dy for intuitive up/down mapping and derive pitch from a sphere.
-      const dirY = -dy;
-      const newPitch = Math.asin(dirY);
-      // Clamp pitch to avoid flipping (±89°)
-      const limit = Math.PI / 2 - 0.01;
-      pitch = Math.max(-limit, Math.min(limit, newPitch));
       // Sync slider with camDist
       zoomSlider.value = String(camDist);
     }
@@ -1990,6 +2007,10 @@
         status.textContent = 'Ready';
         // Initialize height display
         updateHeightDisplay();
+        // Initialize the tilt slider to reflect the default pitch value (convert radians to degrees)
+        if (tiltSlider) {
+          tiltSlider.value = String(Math.round(pitch * 180 / Math.PI));
+        }
         // Show camera prompt initially so the user knows to enable AR
         showCameraPrompt();
       })();
