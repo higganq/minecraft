@@ -312,7 +312,10 @@
     const zoomOutBtn = document.getElementById('zoomOut');
     // Stack mode toggle
     const stackModeBtn = document.getElementById('stackMode');
-    let stackMode = false;
+    // Enable stack mode by default so tapping on existing blocks adds new blocks
+    // rather than removing them. Users can toggle this button to switch to
+    // removal mode if needed.
+    let stackMode = true;
 
     // Fill mode: when enabled, the user selects two corners on the ground to
     // define a rectangular area to fill with the current block type. The
@@ -510,6 +513,9 @@
       stackMode = !stackMode;
       stackModeBtn.classList.toggle('active', stackMode);
     });
+
+    // Since stackMode starts enabled, reflect this in the UI by adding the active class.
+    stackModeBtn.classList.add('active');
 
     // Toggle Fill mode
     fillModeBtn.addEventListener('click', () => {
