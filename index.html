@@ -358,17 +358,20 @@
     const zoomCtx = zoomBall.getContext('2d');
     const tiltSlider = document.getElementById('tiltSlider');
 
-    // When the tilt slider value changes, update the camera's pitch (vertical rotation).
+    // When the tilt slider value changes, update the global block tilt (in radians).
+    // This tilt is applied to each block geometry, causing them to lean forward or backward.
     // The slider's range is specified in degrees; convert to radians for internal use.
     if (tiltSlider) {
       tiltSlider.addEventListener('input', () => {
         const deg = parseFloat(tiltSlider.value);
         if (!isNaN(deg)) {
           // Convert degrees to radians
-          const rad = deg * Math.PI / 180;
-          // Clamp pitch to just under ±90° to avoid flipping
-          const limit = Math.PI / 2 - 0.01;
-          pitch = Math.max(-limit, Math.min(limit, rad));
+          let rad = deg * Math.PI / 180;
+          // Clamp tilt to ±45° to avoid extreme distortion
+          const limit = Math.PI / 4;
+          if (rad > limit) rad = limit;
+          if (rad < -limit) rad = -limit;
+          blockTilt = rad;
         }
       });
     }
@@ -464,6 +467,11 @@
         let camDist = 8; // distance from lookAt point
         const lookAt = { x: 0, y: 0.5, z: 0 }; // center of world (slightly raised)
         const fov = Math.PI / 3; // 60 degrees field of view
+
+    // Block tilt (in radians).  This global value is applied to all block vertices when
+    // rendering, effectively tilting the blocks around the world's X-axis.  The tilt
+    // slider modifies this value.  A value of 0 means blocks are upright.
+    let blockTilt = 0;
 
         // Interaction state
         let isDragging = false;
@@ -728,10 +736,14 @@
       // Compute dirZ on the unit sphere
       const temp = 1 - dirX * dirX - dirY * dirY;
       const dirZ = temp > 0 ? Math.sqrt(temp) : 0;
-      // Update yaw only.  The zoom ball is responsible for adjusting pitch (tilt).
+      // Update yaw and pitch.  Orientation ball controls both horizontal (yaw) and vertical (pitch)
+      // rotation of the camera.  A separate tilt slider will control block tilt independently.
       yaw = Math.atan2(dirX, dirZ);
-      // Do not update pitch here; it will be modified by updateZoomFromEvent when the user
-      // drags on the zoom ball.  This separation keeps the two balls independent.
+      // Compute new pitch from the Y component on the unit sphere
+      const newPitch = Math.asin(dirY);
+      // Clamp pitch to avoid flipping (±89°)
+      const limit = Math.PI / 2 - 0.01;
+      pitch = Math.max(-limit, Math.min(limit, newPitch));
     }
     orientBall.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
@@ -1062,6 +1074,12 @@
           ctx.clearRect(0, 0, width, height);
           const camPos = getCameraPos();
 
+          // Precompute trigonometric values for block tilt.  All blocks share the same tilt
+          // angle, so computing cosine and sine once per frame is more efficient than
+          // recomputing for each vertex.  A zero tilt yields cosTilt=1 and sinTilt=0.
+          const cosTilt = Math.cos(blockTilt);
+          const sinTilt = Math.sin(blockTilt);
+
           // Dynamically adjust anchor thresholds based on the current camera distance.  The farther
           // the camera is from the scene (larger camDist), the more lenient the thresholds become.
           // This allows the user to reveal anchored blocks by zooming out.  When zoomed in,
@@ -1140,7 +1158,11 @@
               }
             }
             const [bx, by, bz] = key.split(',').map(Number);
-            // Define cube vertices relative to block center at (bx,by,bz)
+            // Define cube vertices relative to block center at (bx,by,bz).  Each vertex
+            // is then rotated around the world's X-axis by the global block tilt angle
+            // (blockTilt) before being transformed into camera space.  This tilt allows
+            // users to adjust the apparent lean of all blocks without affecting the camera
+            // orientation.
             const verts = [
               { x: bx - 0.5, y: by - 0.5, z: bz - 0.5 },
               { x: bx + 0.5, y: by - 0.5, z: bz - 0.5 },
@@ -1160,17 +1182,37 @@
               { idx: [1, 2, 6, 5], normal: { x: 1, y: 0, z: 0 } }, // right
               { idx: [0, 3, 7, 4], normal: { x: -1, y: 0, z: 0 } }, // left
             ];
-            // Transform vertices to camera space and skip cube if all vertices behind camera
-            const camVerts = verts.map((v) => worldToCamera(v, camPos));
+            // Apply tilt rotation to each vertex around the block center before transforming to camera space.
+            const camVerts = verts.map((v) => {
+              // Compute relative coordinates with respect to block center
+              const relX = v.x - bx;
+              const relY = v.y - by;
+              const relZ = v.z - bz;
+              // Rotate around X-axis by blockTilt
+              const rotatedY = relY * cosTilt - relZ * sinTilt;
+              const rotatedZ = relY * sinTilt + relZ * cosTilt;
+              // Construct tilted vertex in world coordinates
+              const tilted = { x: bx + relX, y: by + rotatedY, z: bz + rotatedZ };
+              return worldToCamera(tilted, camPos);
+            });
             // Determine if cube is visible (any vertex has z > 0)
             if (!camVerts.some((v) => v.z > 0)) return;
+            // Rotate face normals to account for block tilt.  This ensures lighting and
+            // visibility tests are consistent with the tilted geometry.
             cubeFaces.forEach((face) => {
+              // Compute rotated normal in world space
+              const fn = face.normal;
+              const rotatedNormal = {
+                x: fn.x,
+                y: fn.y * cosTilt - fn.z * sinTilt,
+                z: fn.y * sinTilt + fn.z * cosTilt,
+              };
               // Determine if face is visible: normal pointing towards camera in camera space
               // Transform normal to camera space (approx by rotating point on face center slightly offset by normal)
               const worldCenter = {
-                x: bx + face.normal.x * 0.5,
-                y: by + face.normal.y * 0.5,
-                z: bz + face.normal.z * 0.5,
+                x: bx + rotatedNormal.x * 0.5,
+                y: by + rotatedNormal.y * 0.5,
+                z: bz + rotatedNormal.z * 0.5,
               };
               const camCenter = worldToCamera(worldCenter, camPos);
               // If face center behind camera, skip
@@ -1180,9 +1222,9 @@
               // Here we convert world normal directly into camera space using yaw & pitch inverse
               const nCam = worldToCamera(
                 {
-                  x: camPos.x + face.normal.x,
-                  y: camPos.y + face.normal.y,
-                  z: camPos.z + face.normal.z,
+                  x: camPos.x + rotatedNormal.x,
+                  y: camPos.y + rotatedNormal.y,
+                  z: camPos.z + rotatedNormal.z,
                 },
                 camPos
               );
@@ -2007,9 +2049,9 @@
         status.textContent = 'Ready';
         // Initialize height display
         updateHeightDisplay();
-        // Initialize the tilt slider to reflect the default pitch value (convert radians to degrees)
+        // Initialize the tilt slider to reflect the default block tilt (convert radians to degrees)
         if (tiltSlider) {
-          tiltSlider.value = String(Math.round(pitch * 180 / Math.PI));
+          tiltSlider.value = String(Math.round(blockTilt * 180 / Math.PI));
         }
         // Show camera prompt initially so the user knows to enable AR
         showCameraPrompt();
